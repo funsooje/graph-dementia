@@ -427,10 +427,16 @@ if graph_key in graph_cache:
 
     st.subheader("Graph summary")
     connected_flag = nx.is_weakly_connected(G) if G.is_directed() else nx.is_connected(G)
+    # number of detected communities (Louvain)
+    num_communities = int(out["zip_community"].nunique()) if "zip_community" in out.columns else 0
+    # number of isolated nodes
+    num_isolates = sum(1 for _ in nx.isolates(G))
 
     st.write({
         "nodes": G.number_of_nodes(),
         "edges": G.number_of_edges(),
+        "num_communities": num_communities,
+        "isolated_nodes": num_isolates,
         "k": int(k),
         "is_connected": connected_flag,
         "mode": graph_mode,
@@ -439,6 +445,23 @@ if graph_key in graph_cache:
         "network_fig_cache_hit": network_key in fig_cache["network"],
         "scatter_fig_cache_hit": scatter_key in fig_cache["scatter"],
     })
+
+    # Communities table: count of ZIPs per community
+    st.subheader("Communities (ZIP counts)")
+    try:
+        total_zip_rows = len(out)
+        comm_tbl = (
+            out.assign(zip_community=out["zip_community"].fillna(-1))
+               .groupby("zip_community", dropna=False)
+               .size()
+               .reset_index(name="zip_count")
+               .sort_values("zip_count", ascending=False, kind="mergesort")
+        )
+        if total_zip_rows > 0:
+            comm_tbl["pct_of_total"] = (comm_tbl["zip_count"] / total_zip_rows).round(4)
+        st.dataframe(comm_tbl, width='content')
+    except Exception as e:
+        st.warning(f"Could not compute community counts table: {e}")
 
     # PCA scatter (cached by feature set only)
     st.subheader("PCA indices scatter (cached image)")

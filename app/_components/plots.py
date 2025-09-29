@@ -203,41 +203,125 @@ def plot_geographic_communities(
     ax.grid(True, alpha=0.3)
     return fig
 
+# def plot_profile_scatter_embed(
+#     X: np.ndarray,
+#     features_df,
+#     community_col: str = "profile_community",
+#     size_col: str = "profile_count",
+#     title: str = "Profiles (PCA 2D)",
+#     scale_min_px: float = 8.0,
+#     scale_max_px: float = 120.0,
+# ):
+#     """
+#     2D PCA projection of X (n x d). Colors by community, sizes by profile_count (quantile-scaled).
+#     """
+#     pca = PCA(n_components=2, random_state=42)
+#     X2 = pca.fit_transform(X)
+
+#     if size_col in features_df.columns:
+#         s = features_df[size_col].to_numpy(dtype=float)
+#         s = np.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0)
+#         q5, q95 = np.quantile(s, [0.05, 0.95]) if s.size else (0.0, 1.0)
+#         rng = max(q95 - q5, 1e-12)
+#         s_clipped = np.clip(s, q5, q95)
+#         sizes = scale_min_px + (scale_max_px - scale_min_px) * (s_clipped - q5) / rng
+#     else:
+#         sizes = np.full(len(X2), 30.0)
+
+#     if community_col in features_df.columns:
+#         colors = features_df[community_col].to_numpy()
+#         cmap = "tab20"
+#     else:
+#         colors, cmap = "lightblue", None
+
+#     fig, ax = plt.subplots(figsize=(8, 6))
+#     ax.scatter(X2[:, 0], X2[:, 1], s=sizes, c=colors, cmap=cmap, alpha=0.75, linewidths=0.2, edgecolors="black")
+#     ax.set_title(title)
+#     ax.set_xlabel("PC1")
+#     ax.set_ylabel("PC2")
+#     ax.grid(True, alpha=0.3)
+#     return fig
+
 def plot_profile_scatter_embed(
-    X: np.ndarray,
-    features_df,
+    X_weighted: np.ndarray,
+    out_df: pd.DataFrame,
     community_col: str = "profile_community",
-    size_col: str = "profile_count",
+    size_col: str | None = "profile_count",
+    color_by: str | None = None,     # NEW
     title: str = "Profiles (PCA 2D)",
-    scale_min_px: float = 8.0,
-    scale_max_px: float = 120.0,
+    max_cats_legend: int = 20,
 ):
     """
-    2D PCA projection of X (n x d). Colors by community, sizes by profile_count (quantile-scaled).
+    Projects X_weighted to 2D via PCA and scatters points.
+    - size_col: controls marker sizes (quantile-scaled)
+    - color_by: column in out_df for coloring (categorical or numeric)
+        • categorical (<= max_cats_legend unique): discrete colors + legend
+        • numeric: continuous colormap
+        • None: fallback to community_col
     """
-    pca = PCA(n_components=2, random_state=42)
-    X2 = pca.fit_transform(X)
+    import matplotlib.pyplot as plt
+    from sklearn.decomposition import PCA
 
-    if size_col in features_df.columns:
-        s = features_df[size_col].to_numpy(dtype=float)
-        s = np.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0)
+    n = X_weighted.shape[0]
+    pca = PCA(n_components=2, random_state=42)
+    XY = pca.fit_transform(X_weighted)
+
+    # --- sizes (same scaling you use elsewhere) ---
+    if size_col and size_col in out_df.columns:
+        s = pd.to_numeric(out_df[size_col], errors="coerce").fillna(0.0).to_numpy()
         q5, q95 = np.quantile(s, [0.05, 0.95]) if s.size else (0.0, 1.0)
         rng = max(q95 - q5, 1e-12)
         s_clipped = np.clip(s, q5, q95)
-        sizes = scale_min_px + (scale_max_px - scale_min_px) * (s_clipped - q5) / rng
+        sizes = 12.0 + (90.0) * (s_clipped - q5) / rng
     else:
-        sizes = np.full(len(X2), 30.0)
+        sizes = np.full(n, 30.0)
 
-    if community_col in features_df.columns:
-        colors = features_df[community_col].to_numpy()
-        cmap = "tab20"
+    # --- choose color column ---
+    col = color_by if color_by else community_col
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    if col in out_df.columns:
+        series = out_df[col]
+        # Detect numeric vs categorical
+        if pd.api.types.is_numeric_dtype(series):
+            c = pd.to_numeric(series, errors="coerce").fillna(series.median())
+            sc = ax.scatter(XY[:, 0], XY[:, 1], s=sizes, c=c, cmap="viridis", alpha=0.75, edgecolors="none")
+            cb = fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.04)
+            cb.set_label(col)
+        else:
+            # Treat as categorical-like
+            cats = series.astype("string").fillna("Unknown")
+            uniq = cats.unique().tolist()
+            # cap legend size for readability
+            if len(uniq) > max_cats_legend:
+                # map to integer codes and color by codes (no legend)
+                code_map = {u: i for i, u in enumerate(sorted(uniq))}
+                codes = cats.map(code_map).astype(int).to_numpy()
+                sc = ax.scatter(XY[:, 0], XY[:, 1], s=sizes, c=codes, cmap="tab20", alpha=0.75, edgecolors="none")
+            else:
+                # draw per-category with legend
+                cmap = plt.get_cmap("tab20")
+                for i, u in enumerate(sorted(uniq)):
+                    mask = (cats == u).to_numpy()
+                    ax.scatter(XY[mask, 0], XY[mask, 1], s=sizes[mask], alpha=0.75,
+                               edgecolors="none", color=cmap(i % 20), label=str(u))
+                ax.legend(title=col, loc="best", fontsize=8, ncol=1)
     else:
-        colors, cmap = "lightblue", None
+        # fallback: color by community
+        if community_col in out_df.columns:
+            cats = out_df[community_col].astype("string").fillna("Unknown")
+            uniq = sorted(cats.unique().tolist())
+            cmap = plt.get_cmap("tab20")
+            for i, u in enumerate(uniq):
+                mask = (cats == u).to_numpy()
+                ax.scatter(XY[mask, 0], XY[mask, 1], s=sizes[mask],
+                           alpha=0.75, edgecolors="none", color=cmap(i % 20), label=str(u))
+            ax.legend(title=community_col, loc="best", fontsize=8, ncol=1)
+        else:
+            ax.scatter(XY[:, 0], XY[:, 1], s=sizes, alpha=0.75, edgecolors="none", color="steelblue")
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.scatter(X2[:, 0], X2[:, 1], s=sizes, c=colors, cmap=cmap, alpha=0.75, linewidths=0.2, edgecolors="black")
-    ax.set_title(title)
+    ax.set_title(title + f"\nPCA var exp: {pca.explained_variance_ratio_[0]:.2f}, {pca.explained_variance_ratio_[1]:.2f}")
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
-    ax.grid(True, alpha=0.3)
+    ax.grid(True, alpha=0.2)
     return fig
