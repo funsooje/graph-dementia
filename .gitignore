@@ -1,0 +1,103 @@
+# ----------------------------
+# OS / IDE
+# ----------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ----------------------------
+# Python / Build
+# ----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.pytype/
+coverage.xml
+htmlcov/
+.coverage*
+.cache/
+
+# ----------------------------
+# Environments / Secrets
+# ----------------------------
+.venv/
+venv/
+env/
+ENV/
+*.env
+.env.*
+.envrc
+.streamlit/secrets.toml
+
+# ----------------------------
+# Notebooks
+# ----------------------------
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+
+# ----------------------------
+# Logs / Runtime
+# ----------------------------
+logs/
+*.log
+
+# ----------------------------
+# Project data & caches
+# ----------------------------
+# Keep small sample configs but ignore heavyweight/local data & outputs.
+data/cache/
+data/tmp/
+data/intermediate/
+data/derived/
+
+# If you want to keep only a README in raw/:
+# (uncomment the two lines below if you want to track a README but ignore others)
+# data/raw/*
+# !data/raw/README.md
+
+# If large downloads land here, ignore by default:
+data/raw/
+
+# processed data
+data/processed/
+
+# Cached figures & arrays (from pages 02/04/05)
+data/cache/zip_figs/
+data/cache/patient_figs/
+data/cache/patient_graphs/
+*.npy
+*.npz
+
+# Geospatial byproducts (if you export shapefiles)
+*.shp
+*.shx
+*.dbf
+*.cpg
+*.prj
+*.qpj
+
+# ----------------------------
+# App-specific scratch
+# ----------------------------
+app/**/__pycache__/
+app/_components/__pycache__/
+app/pages/**/__pycache__/
+
+# ----------------------------
+# Misc
+# ----------------------------
+*.bak
+*.tmp
