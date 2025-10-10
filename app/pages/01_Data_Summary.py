@@ -16,6 +16,21 @@ if pat is None or zipc is None:
     st.error("patients_df and zip_df not found in session_state. Ensure Home.py loads them at startup.")
     st.stop()
 
+# --- Patch: normalize AGE_BIN label ('<65' -> '45-65') ---
+try:
+    if pat is not None and "AGE_BIN" in pat.columns:
+        pat = pat.copy()
+        pat["AGE_BIN"] = (
+            pat["AGE_BIN"]
+            .astype("string")
+            .str.strip()
+            .replace({"<65": "45-65"})
+        )
+        # Persist back so other pages see the normalized label
+        st.session_state["patients_df"] = pat
+except Exception as e:
+    st.warning(f"AGE_BIN relabel failed: {e}")
+
 # ---------------------------------------------------------------------
 # Column groups
 # ---------------------------------------------------------------------

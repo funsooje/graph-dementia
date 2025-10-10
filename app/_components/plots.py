@@ -305,7 +305,7 @@ def plot_profile_scatter_embed(
                     mask = (cats == u).to_numpy()
                     ax.scatter(XY[mask, 0], XY[mask, 1], s=sizes[mask], alpha=0.75,
                                edgecolors="none", color=cmap(i % 20), label=str(u))
-                ax.legend(title=col, loc="best", fontsize=8, ncol=1)
+                ax.legend(title=col, loc="best", fontsize=14, title_fontsize=16, ncol=1)
     else:
         # fallback: color by community
         if community_col in out_df.columns:
@@ -316,7 +316,7 @@ def plot_profile_scatter_embed(
                 mask = (cats == u).to_numpy()
                 ax.scatter(XY[mask, 0], XY[mask, 1], s=sizes[mask],
                            alpha=0.75, edgecolors="none", color=cmap(i % 20), label=str(u))
-            ax.legend(title=community_col, loc="best", fontsize=8, ncol=1)
+            ax.legend(title=community_col, loc="best", fontsize=14, title_fontsize=16, ncol=1)
         else:
             ax.scatter(XY[:, 0], XY[:, 1], s=sizes, alpha=0.75, edgecolors="none", color="steelblue")
 
