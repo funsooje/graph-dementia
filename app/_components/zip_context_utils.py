@@ -80,39 +80,3 @@ def compute_graph_metrics(G):
 
     return partition, btw, pr
 
-def compute_adaptive_pca_indices(df: pd.DataFrame, selected_features: list, default_groups: dict):
-    env_features = default_groups.get("environment", [])
-    ses_features = default_groups.get("ses", [])
-
-    env_present = [f for f in env_features if f in selected_features]
-    ses_present = [f for f in ses_features if f in selected_features]
-
-    env_index, env_var, env_cols = pca_first_component(df, env_present) if env_present else (None, None, [])
-    ses_index, ses_var, ses_cols = pca_first_component(df, ses_present) if ses_present else (None, None, [])
-
-    return {
-        "environment_index": env_index,
-        "ses_index": ses_index,
-        "env_var": env_var,
-        "ses_var": ses_var
-    }
-
-def assemble_zip_features(zip_df: pd.DataFrame, G: nx.Graph, partition: dict, betweenness: dict, pagerank: dict, pca_results: dict):
-    df = zip_df.copy()
-    df = df.set_index("ZIPCODE")
-
-    df["environment_index"] = pd.Series(pca_results.get("environment_index"), index=df.index) if pca_results.get("environment_index") is not None else np.nan
-    df["ses_index"] = pd.Series(pca_results.get("ses_index"), index=df.index) if pca_results.get("ses_index") is not None else np.nan
-    df["env_var"] = pca_results.get("env_var", np.nan)
-    df["ses_var"] = pca_results.get("ses_var", np.nan)
-
-    degrees = dict(G.degree(weight=None)) if G is not None else {}
-    df["degree"] = pd.Series(degrees)
-    df["betweenness"] = pd.Series(betweenness) if betweenness else np.nan
-    df["pagerank"] = pd.Series(pagerank) if pagerank else np.nan
-    df["community"] = pd.Series(partition) if partition else np.nan
-
-    df["isolated"] = df["degree"].fillna(0) == 0
-
-    df = df.reset_index()
-    return df
