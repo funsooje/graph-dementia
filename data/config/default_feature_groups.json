@@ -1,0 +1,161 @@
+{
+    "all": {
+        "name": "All Features",
+        "short_code": "all",
+        "columns": [
+            "EPL_OZONE",
+            "EPL_PM",
+            "EPL_DSLPM",
+            "EPL_NPL",
+            "EPL_TRI",
+            "EPL_TSD",
+            "EPL_RMP",
+            "EPL_COAL",
+            "EPL_LEAD",
+            "EPL_PARK",
+            "EPL_HOUAGE",
+            "EPL_WLKIND",
+            "EPL_ROAD",
+            "EPL_RAIL",
+            "EPL_AIRPRT",
+            "EPL_IMPWTR",
+            "EPL_MINRTY",
+            "EPL_POV200",
+            "EPL_NOHSDP",
+            "EPL_UNEMP",
+            "EPL_RENTER",
+            "EPL_HOUBDN",
+            "EPL_UNINSUR",
+            "EPL_NOINT",
+            "EPL_AGE17",
+            "EPL_AGE65",
+            "EPL_DISABL",
+            "EPL_LIMENG",
+            "EPL_MOBILE",
+            "EPL_GROUPQ"
+        ]
+    },
+    "env": {
+        "name": "Environment",
+        "short_code": "env",
+        "columns": [
+            "EPL_OZONE",
+            "EPL_PM",
+            "EPL_DSLPM",
+            "EPL_NPL",
+            "EPL_TRI",
+            "EPL_TSD",
+            "EPL_RMP",
+            "EPL_COAL",
+            "EPL_LEAD",
+            "EPL_PARK",
+            "EPL_HOUAGE",
+            "EPL_WLKIND",
+            "EPL_ROAD",
+            "EPL_RAIL",
+            "EPL_AIRPRT",
+            "EPL_IMPWTR"
+        ]
+    },
+    "ses": {
+        "name": "Socioeconomic Status",
+        "short_code": "ses",
+        "columns": [
+            "EPL_MINRTY",
+            "EPL_POV200",
+            "EPL_NOHSDP",
+            "EPL_UNEMP",
+            "EPL_RENTER",
+            "EPL_HOUBDN",
+            "EPL_UNINSUR",
+            "EPL_NOINT",
+            "EPL_AGE17",
+            "EPL_AGE65",
+            "EPL_DISABL",
+            "EPL_LIMENG",
+            "EPL_MOBILE",
+            "EPL_GROUPQ"
+        ]
+    },
+    "air_water": {
+        "name": "Air and Water Quality",
+        "short_code": "air_water",
+        "columns": [
+            "EPL_PM25",
+            "EPL_OZONE",
+            "EPL_DSLPM",
+            "EPL_WATER",
+            "EPL_AIR",
+            "EPL_PM10",
+            "EPL_PM2_5",
+            "EPL_NO2",
+            "EPL_SO2",
+            "EPL_CO"
+        ]
+    },
+    "toxic_site": {
+        "name": "Toxic Sites",
+        "short_code": "toxic_site",
+        "columns": [
+            "EPL_NPL",
+            "EPL_RMP",
+            "EPL_TSDF",
+            "EPL_LDPNT",
+            "EPL_LEAD"
+        ]
+    },
+    "built_env": {
+        "name": "Built Environment",
+        "short_code": "built_env",
+        "columns": [
+            "EPL_PARK",
+            "EPL_GREEN",
+            "EPL_WALK",
+            "EPL_BIKE",
+            "EPL_FOOD"
+        ]
+    },
+    "transport": {
+        "name": "Transportation",
+        "short_code": "transport",
+        "columns": [
+            "EPL_TRANS",
+            "EPL_VEH",
+            "EPL_COMMUTE",
+            "EPL_TRANSIT"
+        ]
+    },
+    "pop": {
+        "name": "Population",
+        "short_code": "pop",
+        "columns": [
+            "EPL_POP",
+            "EPL_AGE65",
+            "EPL_AGE17",
+            "EPL_MINRTY",
+            "EPL_LIMENG"
+        ]
+    },
+    "household": {
+        "name": "Household",
+        "short_code": "household",
+        "columns": [
+            "EPL_MLTPL",
+            "EPL_MOBILE",
+            "EPL_CROWD",
+            "EPL_NOVEH",
+            "EPL_GROUPQ"
+        ]
+    },
+    "housing": {
+        "name": "Housing",
+        "short_code": "housing",
+        "columns": [
+            "EPL_HBURDEN",
+            "EPL_RENTBURDEN",
+            "EPL_OWNBURDEN",
+            "EPL_UNITS",
+            "EPL_AGE"
+        ]
+    }
+}

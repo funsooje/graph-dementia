@@ -5,7 +5,7 @@ import hashlib
 from pandas.api.types import is_numeric_dtype
 
 st.set_page_config(page_title="Data Summary", layout="wide")
-st.title("01 - Data Summary")
+st.title("Data Summary")
 
 # ---------------------------------------------------------------------
 # Inputs
