@@ -25,9 +25,7 @@ from app._components.zip_context_utils import (
     present,
     pca_first_component,
     build_knn_graph,
-    compute_graph_metrics,
-    compute_adaptive_pca_indices,
-    assemble_zip_features,
+    process_zip_group,
 )
 
 # ---------------------------------------------------------------------
@@ -184,53 +182,49 @@ if recompute_clicked:
         st.error(f"Cannot compute graph: the following columns from the selected feature group are missing in the data: {missing_cols}")
         st.stop()
 
-    # Build feature matrix based on selected group
-    if selected_features:
-        feats = StandardScaler().fit_transform(zipc[selected_features])
-    else:
-        feats = np.zeros((len(zipc), 1))
-    # Graph + metrics
+    # Process this group using utility functions
+    results = process_zip_group(
+        zipc=zipc,
+        group_name=selected_group_name,
+        feature_groups=feature_groups,
+        k=int(k),
+        knn_type=knn_type,
+        default_groups=DEFAULT_FEATURE_GROUPS
+    )
+    
+    if results is None:
+        st.error("Failed to process group - no valid features found.")
+        st.stop()
+    
+    # Extract graph and metrics
+    feats = zipc[selected_features].astype(float).values
+    feats = StandardScaler().fit_transform(feats)
     G = build_knn_graph(feats, k_neighbors=int(k), knn_type=knn_type)
-    partition, betweenness, pagerank = compute_graph_metrics(G)
-
-    # --- PCA indices computed adaptively for this group ---
-    # Determine which of the default env/ses features are present in the selected features
-    env_cols_all = present(zipc, get_cols_from_default("env"))
-    ses_cols_all = present(zipc, get_cols_from_default("ses"))
-    selected_set = set(selected_features)
-    env_cols = [c for c in env_cols_all if c in selected_set]
-    ses_cols = [c for c in ses_cols_all if c in selected_set]
-
-    environment_index, env_var, env_used = None, None, []
-    ses_index, ses_var, ses_used = None, None, []
-    if env_cols:
-        environment_index, env_var, env_used = pca_first_component(zipc, env_cols)
-    if ses_cols:
-        ses_index, ses_var, ses_used = pca_first_component(zipc, ses_cols)
-
-    # Save indices for this group in session_state (for current group only)
-    st.session_state["zip_indices"] = {
-        "environment_index": environment_index,
-        "ses_index": ses_index,
-        "env_var": env_var,
-        "ses_var": ses_var,
-        "env_cols": env_used,
-        "ses_cols": ses_used,
-    }
-
-    # Features table (include computed indices)
-    n = len(zipc)
+    
+    # Create output DataFrame without group suffix
     out = pd.DataFrame({
-        "ZIPCODE": zipc["ZIPCODE"].astype(str).values,
-        "environment_index": environment_index if environment_index is not None else [np.nan]*n,
-        "ses_index": ses_index if ses_index is not None else [np.nan]*n,
-        "zip_community": [partition.get(i, -1) for i in range(n)],
-        "zip_betweenness": [betweenness.get(i, np.nan) for i in range(n)],
-        "zip_pagerank": [pagerank.get(i, np.nan) for i in range(n)],
+        "ZIPCODE": results["ZIPCODE"],
+        "environment_index": results[f"environment_index_{selected_group_name}"],
+        "ses_index": results[f"ses_index_{selected_group_name}"],
+        "zip_community": results[f"zip_community_{selected_group_name}"],
+        "zip_betweenness": results[f"zip_betweenness_{selected_group_name}"],
+        "zip_pagerank": results[f"zip_pagerank_{selected_group_name}"],
+        # degree and isolated are produced by process_zip_group and include group suffix
+        "zip_degree": results.get(f"degree_{selected_group_name}"),
+        "isolated": results.get(f"isolated_{selected_group_name}"),
+        "environment_index_var": results[f"environment_index_var_{selected_group_name}"],
+        "ses_index_var": results[f"ses_index_var_{selected_group_name}"]
     })
-    # Optionally, also include explained variance
-    out["environment_index_var"] = env_var if env_var is not None else np.nan
-    out["ses_index_var"] = ses_var if ses_var is not None else np.nan
+    
+    # Get indices for session state
+    st.session_state["zip_indices"] = {
+        "environment_index": out["environment_index"].to_numpy(),
+        "ses_index": out["ses_index"].to_numpy(),
+        "env_var": out["environment_index_var"].iloc[0],
+        "ses_var": out["ses_index_var"].iloc[0],
+        "env_cols": [c for c in selected_features if c in get_cols_from_default("env")],
+        "ses_cols": [c for c in selected_features if c in get_cols_from_default("ses")]
+    }
 
     # Save graph data
     graph_cache[selected_group_key] = {"graph": G, "features": out}
@@ -297,8 +291,17 @@ if 'set_zip_clicked' in locals() and set_zip_clicked:
         else:
             st.info("One-hot preview: zip_community not found in current outputs.")
 
-        # Ensure required columns exist
-        needed = {"ZIPCODE", "environment_index", "ses_index", "zip_community", "zip_betweenness", "zip_pagerank"}
+        # Ensure required columns exist (including degree and isolated provided by process_zip_group)
+        needed = {
+            "ZIPCODE",
+            "environment_index",
+            "ses_index",
+            "zip_community",
+            "zip_betweenness",
+            "zip_pagerank",
+            "zip_degree",
+            "isolated",
+        }
         missing = needed.difference(out.columns)
         # Get adaptive PCA explained variance from session_state["zip_indices"]
         zip_indices = st.session_state.get("zip_indices", {})
@@ -341,8 +344,6 @@ if selected_group_key in graph_cache:
     columns_to_include = [
         "environment_index",
         "ses_index",
-        "environment_index_var",
-        "ses_index_var",
         "zip_degree",
         "zip_betweenness",
         "zip_pagerank",
@@ -350,14 +351,7 @@ if selected_group_key in graph_cache:
         "isolated",
     ]
     # Compute zip_degree if missing
-    if "zip_degree" not in out.columns:
-        # Degree for each node (number of neighbors)
-        degree_dict = dict(G.degree())
-        out["zip_degree"] = out.index.map(lambda i: degree_dict.get(i, 0))
-    # Compute isolated if missing
-    if "isolated" not in out.columns:
-        isolate_set = set(nx.isolates(G))
-        out["isolated"] = out.index.map(lambda i: i in isolate_set)
+    # zip_degree and isolated are expected to be provided by process_zip_group
     # Add environment_index_var and ses_index_var if not present
     if "environment_index_var" not in out.columns:
         env_var = st.session_state.get("zip_indices", {}).get("env_var", np.nan)
