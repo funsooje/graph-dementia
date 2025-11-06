@@ -35,6 +35,42 @@
             "EPL_GROUPQ"
         ]
     },
+    "all_raw": {
+        "name": "All Features (Raw)",
+        "short_code": "all_raw",
+        "columns": [
+            "E_OZONE",
+            "E_PM",
+            "E_DSLPM",
+            "E_NPL",
+            "E_TRI",
+            "E_TSD",
+            "E_RMP",
+            "E_COAL",
+            "E_LEAD",
+            "E_PARK",
+            "E_HOUAGE",
+            "E_WLKIND",
+            "E_ROAD",
+            "E_RAIL",
+            "E_AIRPRT",
+            "E_IMPWTR",
+            "EP_MINRTY",
+            "EP_POV200",
+            "EP_NOHSDP",
+            "EP_UNEMP",
+            "EP_RENTER",
+            "EP_HOUBDN",
+            "EP_UNINSUR",
+            "EP_NOINT",
+            "EP_AGE17",
+            "EP_AGE65",
+            "EP_DISABL",
+            "EP_LIMENG",
+            "EP_MOBILE",
+            "EP_GROUPQ"
+        ]
+    },
     "env": {
         "name": "Environment",
         "short_code": "env",
@@ -57,6 +93,28 @@
             "EPL_IMPWTR"
         ]
     },
+    "env_raw": {
+        "name": "Environment (Raw)",
+        "short_code": "env_raw",
+        "columns": [
+            "E_OZONE",
+            "E_PM",
+            "E_DSLPM",
+            "E_NPL",
+            "E_TRI",
+            "E_TSD",
+            "E_RMP",
+            "E_COAL",
+            "E_LEAD",
+            "E_PARK",
+            "E_HOUAGE",
+            "E_WLKIND",
+            "E_ROAD",
+            "E_RAIL",
+            "E_AIRPRT",
+            "E_IMPWTR"
+        ]
+    },
     "ses": {
         "name": "Socioeconomic Status",
         "short_code": "ses",
@@ -75,6 +133,26 @@
             "EPL_LIMENG",
             "EPL_MOBILE",
             "EPL_GROUPQ"
+        ]
+    },
+    "ses_raw": {
+        "name": "Socioeconomic Status (Raw)",
+        "short_code": "ses_raw",
+        "columns": [
+            "EP_MINRTY",
+            "EP_POV200",
+            "EP_NOHSDP",
+            "EP_UNEMP",
+            "EP_RENTER",
+            "EP_HOUBDN",
+            "EP_UNINSUR",
+            "EP_NOINT",
+            "EP_AGE17",
+            "EP_AGE65",
+            "EP_DISABL",
+            "EP_LIMENG",
+            "EP_MOBILE",
+            "EP_GROUPQ"
         ]
     },
     "air_water": {

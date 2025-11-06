@@ -29,7 +29,21 @@ SES = [
         'EPL_AGE65', 'EPL_DISABL', 'EPL_LIMENG', 'EPL_MOBILE', 'EPL_GROUPQ'
 ]
 
+ENV_RAW = [
+    'E_OZONE', 'E_PM', 'E_DSLPM', 'E_NPL',
+        'E_TRI', 'E_TSD', 'E_RMP', 'E_COAL', 'E_LEAD', 'E_PARK',
+        'E_HOUAGE', 'E_WLKIND', 'E_ROAD', 'E_RAIL', 'E_AIRPRT',
+        'E_IMPWTR'
+]
+
+SES_RAW = [
+    'EP_MINRTY', 'EP_POV200', 'EP_NOHSDP', 'EP_UNEMP',
+        'EP_RENTER', 'EP_HOUBDN', 'EP_UNINSUR', 'EP_NOINT', 'EP_AGE17',
+        'EP_AGE65', 'EP_DISABL', 'EP_LIMENG', 'EP_MOBILE', 'EP_GROUPQ'
+]
+
 ALL = ENV + SES
+ALL_RAW = ENV_RAW + SES_RAW
 
 # Define default feature groups
 default_feature_groups = {
@@ -38,15 +52,30 @@ default_feature_groups = {
         "short_code": "all",
         "columns": ALL
     },
+    "all_raw": {
+        "name": "All Features (Raw)",
+        "short_code": "all_raw",
+        "columns": ALL_RAW
+    },
     "env": {
         "name": "Environment",
         "short_code": "env",
         "columns": ENV
     },
+    "env_raw": {
+        "name": "Environment (Raw)",
+        "short_code": "env_raw",
+        "columns": ENV_RAW
+    },
     "ses": {
         "name": "Socioeconomic Status",
         "short_code": "ses",
         "columns": SES
+    },
+    "ses_raw": {
+        "name": "Socioeconomic Status (Raw)",
+        "short_code": "ses_raw",
+        "columns": SES_RAW
     },
     "air_water": {
         "name": "Air and Water Quality",

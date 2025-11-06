@@ -65,8 +65,8 @@ def compute_adaptive_pca_indices(
         return group
 
     # Find which env/ses columns are in the selected features
-    env_cols_all = present(df, get_cols_from_default("env"))
-    ses_cols_all = present(df, get_cols_from_default("ses"))
+    env_cols_all = present(df, get_cols_from_default("env")) + present(df, get_cols_from_default("env_raw"))
+    ses_cols_all = present(df, get_cols_from_default("ses")) + present(df, get_cols_from_default("ses_raw"))
     selected_set = set(selected_features)
     
     env_cols = [c for c in env_cols_all if c in selected_set]

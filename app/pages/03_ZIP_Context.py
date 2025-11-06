@@ -202,6 +202,9 @@ if recompute_clicked:
     G = build_knn_graph(feats, k_neighbors=int(k), knn_type=knn_type)
     
     # Create output DataFrame without group suffix
+    env_var_key = f"environment_index_var_{selected_group_name}"
+    ses_var_key = f"ses_index_var_{selected_group_name}"
+
     out = pd.DataFrame({
         "ZIPCODE": results["ZIPCODE"],
         "environment_index": results[f"environment_index_{selected_group_name}"],
@@ -212,16 +215,16 @@ if recompute_clicked:
         # degree and isolated are produced by process_zip_group and include group suffix
         "zip_degree": results.get(f"degree_{selected_group_name}"),
         "isolated": results.get(f"isolated_{selected_group_name}"),
-        "environment_index_var": results[f"environment_index_var_{selected_group_name}"],
-        "ses_index_var": results[f"ses_index_var_{selected_group_name}"]
+        "environment_index_var": results[env_var_key] if env_var_key in results.columns else None,
+        "ses_index_var": results[ses_var_key] if ses_var_key in results.columns else None
     })
-    
+
     # Get indices for session state
     st.session_state["zip_indices"] = {
         "environment_index": out["environment_index"].to_numpy(),
         "ses_index": out["ses_index"].to_numpy(),
-        "env_var": out["environment_index_var"].iloc[0],
-        "ses_var": out["ses_index_var"].iloc[0],
+        "env_var": out["environment_index_var"].iloc[0] if "environment_index_var" in out.columns else None,
+        "ses_var": out["ses_index_var"].iloc[0] if "ses_index_var" in out.columns else None,
         "env_cols": [c for c in selected_features if c in get_cols_from_default("env")],
         "ses_cols": [c for c in selected_features if c in get_cols_from_default("ses")]
     }
