@@ -107,9 +107,9 @@ with st.sidebar:
             ["Mutual k-NN (undirected)", "Directed k-NN"],
             index={"mutual":0, "directed":1}.get(st.session_state.get("knn_type","mutual"), 0),
         )
-        resolution = st.slider(
-            "Community resolution",
-            min_value=0.1, max_value=3.0, value=float(st.session_state.get("resolution", 1.0)), step=0.1,
+        resolution = st.number_input(
+            "Community resolution (recommended: 0.1-3.0)",
+            min_value=0.01, max_value=100.0, value=float(st.session_state.get("resolution", 1.0)), step=0.1, format="%.2f",
             help="Higher values produce more/smaller communities, lower values produce fewer/larger communities"
         )
         # colb1, colb2 = st.columns(2)
@@ -224,7 +224,9 @@ if recompute_clicked:
         "zip_degree": results.get(f"degree_{selected_group_name}"),
         "isolated": results.get(f"isolated_{selected_group_name}"),
         "environment_index_var": results[env_var_key] if env_var_key in results.columns else None,
-        "ses_index_var": results[ses_var_key] if ses_var_key in results.columns else None
+        "ses_index_var": results[ses_var_key] if ses_var_key in results.columns else None,
+        # Add modularity from results
+        "modularity": results.get(f"modularity_{selected_group_name}")
     })
 
     # Get indices for session state
@@ -394,12 +396,20 @@ if selected_group_key in graph_cache:
     num_communities = int(out["zip_community"].nunique()) if "zip_community" in out.columns else 0
     # number of isolated nodes
     num_isolates = sum(1 for _ in nx.isolates(G))
+    # connected communities (excluding isolates which are singleton communities)
+    connected_communities = num_communities - num_isolates if num_communities >= num_isolates else num_communities
+    # Extract modularity from the results dataframe (it's stored as a scalar column)
+    modularity_val = out["modularity"].iloc[0] if "modularity" in out.columns else np.nan
+    
     # Only display selected statistics (exclude cache and status flags)
     graph_summary_dict = {
         "nodes": G.number_of_nodes(),
         "edges": G.number_of_edges(),
         "num_communities": num_communities,
+        "connected_communities": connected_communities,
         "isolated_nodes": num_isolates,
+        "resolution": resolution_val,
+        "modularity": f"{modularity_val:.4f}" if not np.isnan(modularity_val) else "N/A",
         "k": int(k),
         "is_connected": connected_flag,
         "feature_group": selected_group_name,

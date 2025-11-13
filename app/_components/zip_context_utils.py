@@ -134,27 +134,37 @@ def compute_graph_metrics(G, resolution=1.0):
     - Communities (Louvain) on an undirected view
     - Betweenness: directed if DiGraph, undirected otherwise
     - PageRank: directed if DiGraph, undirected otherwise
+    - Modularity: quality of the partition
     
     Args:
         G: NetworkX graph
         resolution: Resolution parameter for community detection (default 1.0)
                    Higher values favor smaller communities, lower values favor larger ones
+    
+    Returns:
+        partition: dict mapping node -> community
+        betweenness: dict mapping node -> betweenness centrality
+        pagerank: dict mapping node -> pagerank score
+        modularity: float, quality score of the partition
     """
+    if G.number_of_edges() == 0:
+        empty = {n: -1 for n in G.nodes()}
+        zeros = {n: 0.0 for n in G.nodes()}
+        return empty, zeros, zeros, 0.0
+    
     if G.is_directed():
         G_u = G.to_undirected(reciprocal=False)
         partition = community_louvain.best_partition(G_u, weight="weight", resolution=resolution, random_state=42)
+        modularity = community_louvain.modularity(partition, G_u, weight="weight")
         btw = nx.betweenness_centrality(G, weight="weight", normalized=True)
         pr = nx.pagerank(G, alpha=0.85, weight="weight")
     else:
         partition = community_louvain.best_partition(G, weight="weight", resolution=resolution, random_state=42)
+        modularity = community_louvain.modularity(partition, G, weight="weight")
         btw = nx.betweenness_centrality(G, weight="weight", normalized=True)
         pr = nx.pagerank(G, alpha=0.85, weight="weight")
-    if G.number_of_edges() == 0:
-        empty = {n: -1 for n in G.nodes()}
-        zeros = {n: 0.0 for n in G.nodes()}
-        return empty, zeros, zeros
 
-    return partition, btw, pr
+    return partition, btw, pr, modularity
 
 def save_figure_to_cache(fig, path: Path, dpi: int = 110) -> str:
     """Save a matplotlib figure to disk with proper directory creation."""
@@ -269,7 +279,7 @@ def process_zip_group(
     
     # Build graph and compute metrics
     G = build_knn_graph(feats, k_neighbors=k, knn_type=knn_type)
-    partition, betweenness, pagerank = compute_graph_metrics(G, resolution=resolution)
+    partition, betweenness, pagerank, modularity = compute_graph_metrics(G, resolution=resolution)
     # Compute degree and isolated status per node
     # For DiGraph, G.degree() returns the sum of in+out degrees; for Graph it's degree
     degree_dict = dict(G.degree())
@@ -309,6 +319,9 @@ def process_zip_group(
         is_connected=is_connected,
         group_suffix=group_name
     )
+    
+    # Add modularity as a scalar column (same value for all rows)
+    results[f"modularity_{group_name}"] = modularity
     
     return results
 
