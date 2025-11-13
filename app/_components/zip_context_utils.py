@@ -128,20 +128,25 @@ def build_knn_graph(features: np.ndarray, k_neighbors: int, knn_type: str):
                     G.add_edge(i, j, weight=w)
     return G
 
-def compute_graph_metrics(G):
+def compute_graph_metrics(G, resolution=1.0):
     """
     Compute graph metrics:
     - Communities (Louvain) on an undirected view
     - Betweenness: directed if DiGraph, undirected otherwise
     - PageRank: directed if DiGraph, undirected otherwise
+    
+    Args:
+        G: NetworkX graph
+        resolution: Resolution parameter for community detection (default 1.0)
+                   Higher values favor smaller communities, lower values favor larger ones
     """
     if G.is_directed():
         G_u = G.to_undirected(reciprocal=False)
-        partition = community_louvain.best_partition(G_u, weight="weight", random_state=42)
+        partition = community_louvain.best_partition(G_u, weight="weight", resolution=resolution, random_state=42)
         btw = nx.betweenness_centrality(G, weight="weight", normalized=True)
         pr = nx.pagerank(G, alpha=0.85, weight="weight")
     else:
-        partition = community_louvain.best_partition(G, weight="weight", random_state=42)
+        partition = community_louvain.best_partition(G, weight="weight", resolution=resolution, random_state=42)
         btw = nx.betweenness_centrality(G, weight="weight", normalized=True)
         pr = nx.pagerank(G, alpha=0.85, weight="weight")
     if G.number_of_edges() == 0:
@@ -235,7 +240,8 @@ def process_zip_group(
     feature_groups: dict,
     k: int,
     knn_type: str,
-    default_groups: dict = None
+    default_groups: dict = None,
+    resolution: float = 1.0
 ) -> pd.DataFrame:
     """
     Process a single ZIP code feature group and return results DataFrame.
@@ -247,6 +253,7 @@ def process_zip_group(
         k: Number of neighbors for kNN
         knn_type: Type of kNN graph ("mutual" or "directed")
         default_groups: Default feature groups dict for env/ses detection
+        resolution: Resolution parameter for community detection (default 1.0)
     
     Returns:
         DataFrame with processed results
@@ -262,7 +269,7 @@ def process_zip_group(
     
     # Build graph and compute metrics
     G = build_knn_graph(feats, k_neighbors=k, knn_type=knn_type)
-    partition, betweenness, pagerank = compute_graph_metrics(G)
+    partition, betweenness, pagerank = compute_graph_metrics(G, resolution=resolution)
     # Compute degree and isolated status per node
     # For DiGraph, G.degree() returns the sum of in+out degrees; for Graph it's degree
     degree_dict = dict(G.degree())

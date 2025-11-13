@@ -107,6 +107,11 @@ with st.sidebar:
             ["Mutual k-NN (undirected)", "Directed k-NN"],
             index={"mutual":0, "directed":1}.get(st.session_state.get("knn_type","mutual"), 0),
         )
+        resolution = st.slider(
+            "Community resolution",
+            min_value=0.1, max_value=3.0, value=float(st.session_state.get("resolution", 1.0)), step=0.1,
+            help="Higher values produce more/smaller communities, lower values produce fewer/larger communities"
+        )
         # colb1, colb2 = st.columns(2)
         # with colb1:
         #     update_plots_clicked = st.form_submit_button("Load Plots")
@@ -119,6 +124,7 @@ st.session_state["selected_feature_group"] = selected_group_name
 st.session_state["graph_layout"] = layout_choice
 st.session_state["graph_k"] = int(k)
 st.session_state["knn_type"] = "mutual" if knn_type_label.startswith("Mutual") else "directed"
+st.session_state["resolution"] = float(resolution)
 
 # ---------------------------------------------------------------------
 # Disk figure cache helpers
@@ -150,10 +156,11 @@ if "zip_fig_cache" not in st.session_state:
 fig_cache = st.session_state["zip_fig_cache"]
 
 knn_type = st.session_state["knn_type"]  # "mutual" or "directed"
-selected_group_key = (selected_group_name, int(k), knn_type)
-network_key = (selected_group_name, int(k), knn_type, st.session_state["graph_layout"])
+resolution_val = st.session_state["resolution"]  # community detection resolution
+selected_group_key = (selected_group_name, int(k), knn_type, resolution_val)
+network_key = (selected_group_name, int(k), knn_type, resolution_val, st.session_state["graph_layout"])
 scatter_key = (selected_group_name,)  # scatter depends only on feature set
-geo_key     = (selected_group_name, int(k), knn_type)
+geo_key     = (selected_group_name, int(k), knn_type, resolution_val)
 
 # ---------------------------------------------------------------------
 # Actions
@@ -189,7 +196,8 @@ if recompute_clicked:
         feature_groups=feature_groups,
         k=int(k),
         knn_type=knn_type,
-        default_groups=DEFAULT_FEATURE_GROUPS
+        default_groups=DEFAULT_FEATURE_GROUPS,
+        resolution=resolution_val
     )
     
     if results is None:
@@ -232,8 +240,8 @@ if recompute_clicked:
     # Save graph data
     graph_cache[selected_group_key] = {"graph": G, "features": out}
 
-    # Render and cache Network plot (by group,k,layout)
-    net_path = CACHE_DIR / f"net_{selected_group_name}_k{int(k)}_{knn_type}_{st.session_state['graph_layout']}.png"
+    # Render and cache Network plot (by group,k,resolution,layout)
+    net_path = CACHE_DIR / f"net_{selected_group_name}_k{int(k)}_{knn_type}_res{resolution_val:.1f}_{st.session_state['graph_layout']}.png"
     fig_net = plot_networkx_graph(
         G,
         out_df=out,
@@ -243,7 +251,7 @@ if recompute_clicked:
         edge_color="gray",
         community_col="zip_community",
         size_col="zip_pagerank",
-        title=f"Network plot: {selected_group_name} (k={int(k)}, {knn_type}, layout={st.session_state['graph_layout']})",
+        title=f"Network plot: {selected_group_name} (k={int(k)}, {knn_type}, res={resolution_val:.1f}, layout={st.session_state['graph_layout']})",
         layout=st.session_state["graph_layout"],
         scale_factor = 4.0
     )
@@ -258,8 +266,8 @@ if recompute_clicked:
         "scatter_png_path": fig_to_png_file(fig_scatter, scatter_path)
     }
 
-    # --- Geographic plot (cache by group,k,knn_type) ---
-    geo_path = CACHE_DIR / f"geo_{selected_group_name}_k{int(k)}_{knn_type}.png"
+    # --- Geographic plot (cache by group,k,knn_type,resolution) ---
+    geo_path = CACHE_DIR / f"geo_{selected_group_name}_k{int(k)}_{knn_type}_res{resolution_val:.1f}.png"
     fig_geo = plot_geographic_communities(
         out,            
         zip_coords,     
@@ -318,6 +326,7 @@ if 'set_zip_clicked' in locals() and set_zip_clicked:
                 "feature_group": selected_group_name,
                 "k": int(k),
                 "knn_type": st.session_state["knn_type"],
+                "resolution": st.session_state["resolution"],
                 "layout": st.session_state["graph_layout"],
                 "env_var": env_var,
                 "ses_var": ses_var,
@@ -339,7 +348,7 @@ if selected_group_key in graph_cache:
         meta = st.session_state["zip_features_meta"]
         st.info(
             f"Active ZIP features set from: feature_group='{meta.get('feature_group', '')}', k={meta['k']}, "
-            f"knn_type='{meta['knn_type']}', layout='{meta['layout']}'."
+            f"knn_type='{meta['knn_type']}', resolution={meta.get('resolution', 1.0):.1f}, layout='{meta['layout']}'."
         )
 
     st.subheader("Derived ZIP features")
