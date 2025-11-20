@@ -30,84 +30,6 @@ PAT_GROUPS = {
     "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes"],
 }
 
-def default_selected_columns(df: pd.DataFrame) -> list:
-    """Demographics + risk + PAYER if present (order preserved)."""
-    picks = []
-    picks += [c for c in PAT_GROUPS["demographics"] if c in df.columns]
-    picks += [c for c in PAT_GROUPS["risk_binaries"] if c in df.columns]
-    if "PAYER" in df.columns:
-        picks.append("PAYER")
-    seen, ordered = set(), []
-    for c in picks:
-        if c not in seen:
-            seen.add(c)
-            ordered.append(c)
-    return ordered
-
-# ---------------------------------------------------------------------
-# Sidebar controls
-# ---------------------------------------------------------------------
-with st.sidebar:
-    st.header("Controls")
-
-    # --- Profile columns ---
-    st.subheader("Profile columns")
-    colg1, colg2, colg3 = st.columns(3)
-    with colg1:
-        inc_demo = st.checkbox("Demographics", value=True)
-    with colg2:
-        inc_util = st.checkbox("Utilization", value=False)
-    with colg3:
-        inc_risk = st.checkbox("Risk binaries", value=True)
-
-    base_cols = []
-    if inc_demo:
-        base_cols += [c for c in PAT_GROUPS["demographics"] if c in pat.columns]
-    if inc_util:
-        base_cols += [c for c in PAT_GROUPS["utilization"] if c in pat.columns]
-    if inc_risk:
-        base_cols += [c for c in PAT_GROUPS["risk_binaries"] if c in pat.columns]
-
-    allowed_cols = (
-        [c for c in PAT_GROUPS["location"] if c in pat.columns] +
-        [c for c in PAT_GROUPS["demographics"] if c in pat.columns] +
-        [c for c in PAT_GROUPS["utilization"] if c in pat.columns] +
-        [c for c in PAT_GROUPS["risk_binaries"] if c in pat.columns]
-    )
-    default_cols = st.session_state.get("pf_default_cols", default_selected_columns(pat))
-    merged_defaults = list(dict.fromkeys(default_cols + base_cols))
-
-    selected_cols = st.multiselect(
-        "Selected columns for profiling (categorical/binned only)",
-        options=sorted(allowed_cols),
-        default=sorted(set(merged_defaults)) or base_cols,
-        help="Use only categorical/binned columns defined in PAT_GROUPS. Include ZIPCODE to split profiles geographically.",
-    )
-    st.session_state["pf_default_cols"] = selected_cols
-
-    # --- ZIP context features ---
-    st.subheader("ZIP context features")
-    use_env = st.checkbox("environment_index", value=True)
-    use_ses = st.checkbox("ses_index", value=True)
-    use_pr  = st.checkbox("zip_pagerank", value=False)
-    use_btw = st.checkbox("zip_betweenness", value=False)
-    onehot_comm = st.checkbox("one-hot zip_community (split path only)", value=False)
-
-    # --- ZIP handling if ZIP not selected ---
-    st.subheader("ZIP handling for profiles")
-    zip_strategy = st.radio(
-        "If ZIPCODE is not among profile columns:",
-        options=["Split profiles by ZIP (profile × ZIP)", "Aggregate ZIP features across patients"],
-        index=0,
-    )
-
-    # --- Actions ---
-    colb1, colb2 = st.columns(2)
-    with colb1:
-        generate_clicked = st.button("Generate Fused Summary")   # runs Steps 2 + 3 (no weights/graph)
-    with colb2:
-        save_settings_clicked = st.button("Save Fused Settings")  # stores config only
-
 # ---------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------
@@ -143,6 +65,84 @@ def _safe_merge(left: pd.DataFrame, right: pd.DataFrame, on: str, how: str = "le
     return L.merge(R, on=on, how=how)
 
 # ---------------------------------------------------------------------
+# Main page controls
+# ---------------------------------------------------------------------
+st.header("Configuration")
+
+# --- 1. Profile Columns Section ---
+st.subheader("1. Profile Columns")
+st.caption("Select columns for patient profiling (categorical/binned only)")
+
+# Get available columns for each group
+demo_cols = [c for c in PAT_GROUPS["demographics"] if c in pat.columns]
+util_cols = [c for c in PAT_GROUPS["utilization"] if c in pat.columns]
+risk_cols = [c for c in PAT_GROUPS["risk_binaries"] if c in pat.columns]
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.markdown("**Demographics**")
+    selected_demo = []
+    for col in demo_cols:
+        if st.checkbox(col, key=f"demo_{col}", value=False):
+            selected_demo.append(col)
+
+with col2:
+    st.markdown("**Utilization**")
+    selected_util = []
+    for col in util_cols:
+        if st.checkbox(col, key=f"util_{col}", value=False):
+            selected_util.append(col)
+
+with col3:
+    st.markdown("**Risk Binaries**")
+    selected_risk = []
+    for col in risk_cols:
+        if st.checkbox(col, key=f"risk_{col}", value=False):
+            selected_risk.append(col)
+
+# Combine all selected columns
+selected_cols = selected_demo + selected_util + selected_risk
+
+st.divider()
+
+# --- 2. ZIP Context Features Section ---
+st.subheader("2. ZIP Context Features")
+st.caption("Select ZIP-level features to include in fusion")
+
+zip_col1, zip_col2, zip_col3 = st.columns(3)
+
+with zip_col1:
+    use_env = st.checkbox("environment_index", value=True, key="zip_env")
+    use_ses = st.checkbox("ses_index", value=True, key="zip_ses")
+
+with zip_col2:
+    use_degree = st.checkbox("zip_degree", value=False, key="zip_degree")
+    use_pr = st.checkbox("zip_pagerank", value=False, key="zip_pr")
+
+with zip_col3:
+    use_btw = st.checkbox("zip_betweenness", value=False, key="zip_btw")
+    onehot_comm = st.checkbox("one-hot zip_community (split path only)", value=False, key="zip_onehot")
+
+st.divider()
+
+# --- 3. ZIP Handling Section ---
+st.subheader("3. ZIP Handling")
+st.caption("Choose how to handle ZIP features when ZIPCODE is not in profile columns")
+
+split_by_zip = st.toggle("Split profiles by ZIP", value=False, key="zip_split",
+                         help="ON: Create separate profiles for each ZIP (profile × ZIP). OFF: Aggregate ZIP features across patients.")
+
+st.divider()
+
+# --- 4. Action Buttons ---
+col_btn1, col_btn2, _ = st.columns([1, 1, 3])
+with col_btn1:
+    generate_clicked = st.button("Generate Fused Data", type="primary", width='stretch')
+with col_btn2:
+    save_settings_clicked = st.button("Save Fused Settings", width='stretch')
+
+# ---------------------------------------------------------------------
 # Save settings (config only; no computation)
 # ---------------------------------------------------------------------
 if save_settings_clicked:
@@ -151,13 +151,14 @@ if save_settings_clicked:
         "zip_features": {
             "environment_index": use_env,
             "ses_index": use_ses,
+            "zip_degree": use_degree,
             "zip_pagerank": use_pr,
             "zip_betweenness": use_btw,
             "onehot_zip_community": onehot_comm,
         },
-        "zip_strategy": zip_strategy,
+        "split_by_zip": split_by_zip,
     }
-    st.success("Settings saved to session_state['pf_controls_saved'].")
+    st.success("✓ Settings saved to session_state['pf_controls_saved'].")
 
 # ---------------------------------------------------------------------
 # Generate Fused Summary (Steps 2 + 3; no graph/weights)
@@ -169,11 +170,12 @@ if generate_clicked:
         "zip_features": {
             "environment_index": use_env,
             "ses_index": use_ses,
+            "zip_degree": use_degree,
             "zip_pagerank": use_pr,
             "zip_betweenness": use_btw,
             "onehot_zip_community": onehot_comm,
         },
-        "zip_strategy": zip_strategy,
+        "split_by_zip": split_by_zip,
     }
 
     # ===================== STEP 2: profile construction =====================
@@ -197,7 +199,7 @@ if generate_clicked:
     zip_counts = None
 
     if "ZIPCODE" not in selected_cols and "ZIPCODE" in dfw.columns:
-        if zip_strategy.startswith("Split profiles"):
+        if split_by_zip:
             cols_zip = selected_cols + ["ZIPCODE"]
             pbz = dfw.groupby(cols_zip, dropna=False).size().reset_index(name="profile_count")
             pbz["profile_zip_id"] = pbz.apply(lambda r: _make_profile_id(r, cols_zip, "profzip"), axis=1)
@@ -214,20 +216,20 @@ if generate_clicked:
     st.session_state["pf_profiles_meta"] = {
         "selected_cols": selected_cols,
         "zip_in_selected": ("ZIPCODE" in selected_cols),
-        "zip_strategy": zip_strategy,
+        "split_by_zip": split_by_zip,
         "n_profiles_base": int(len(base_grp)),
         "n_profiles_by_zip": int(len(profiles_by_zip)) if profiles_by_zip is not None else 0,
         "has_zip_counts": bool(zip_counts is not None),
     }
 
-    st.success("Profiles constructed.")
+    st.success("✓ Profiles constructed.")
 
     # ===================== STEP 3: ZIP join + fused encoding =====================
     zip_feats = st.session_state.get("zip_features")
     if zip_feats is None:
         st.warning("ZIP features not found. Go to page 02 and click 'Set as ZIP features'.")
     else:
-        use_split = (("ZIPCODE" in selected_cols) or zip_strategy.startswith("Split profiles"))
+        use_split = (("ZIPCODE" in selected_cols) or split_by_zip)
 
         if use_split:
             prof_tbl = st.session_state.get("pf_profiles_by_zip")
@@ -238,7 +240,7 @@ if generate_clicked:
             join_key = "ZIPCODE" if ("ZIPCODE" in prof_tbl.columns) else None
             if join_key is None:
                 st.error("Split path selected but no ZIPCODE column found in profiles. "
-                        "Include ZIPCODE in selected columns or choose the aggregate path.")
+                        "Include ZIPCODE in selected columns or turn off split toggle.")
                 st.stop()
             fused_tbl = _safe_merge(prof_tbl, zip_feats, on="ZIPCODE", how="left")
 
@@ -246,7 +248,7 @@ if generate_clicked:
             base = base_grp
             zc = st.session_state.get("pf_zip_counts")
             if zc is None:
-                st.error("Aggregate ZIP path requires pf_zip_counts. Click Generate Fused Summary again.")
+                st.error("Aggregate ZIP path requires pf_zip_counts. Click Generate Fused Data again.")
                 st.stop()
 
             zc2 = _safe_merge(zc, zip_feats, on="ZIPCODE", how="left")
@@ -255,7 +257,8 @@ if generate_clicked:
             zip_num_cols = []
             if use_env: zip_num_cols.append("environment_index")
             if use_ses: zip_num_cols.append("ses_index")
-            if use_pr  and "zip_pagerank"    in zc2.columns: zip_num_cols.append("zip_pagerank")
+            if use_degree and "zip_degree" in zc2.columns: zip_num_cols.append("zip_degree")
+            if use_pr and "zip_pagerank" in zc2.columns: zip_num_cols.append("zip_pagerank")
             if use_btw and "zip_betweenness" in zc2.columns: zip_num_cols.append("zip_betweenness")
 
             if zip_num_cols:
@@ -286,7 +289,8 @@ if generate_clicked:
         zip_num_cols2 = []
         if use_env and "environment_index" in fused_tbl.columns: zip_num_cols2.append("environment_index")
         if use_ses and "ses_index" in fused_tbl.columns: zip_num_cols2.append("ses_index")
-        if use_pr  and "zip_pagerank" in fused_tbl.columns: zip_num_cols2.append("zip_pagerank")
+        if use_degree and "zip_degree" in fused_tbl.columns: zip_num_cols2.append("zip_degree")
+        if use_pr and "zip_pagerank" in fused_tbl.columns: zip_num_cols2.append("zip_pagerank")
         if use_btw and "zip_betweenness" in fused_tbl.columns: zip_num_cols2.append("zip_betweenness")
 
         zip_num_df = (
@@ -321,47 +325,77 @@ if generate_clicked:
             "join_key": join_key,
         }
 
-        st.success(f"Fused summary built: {X_fused.shape[0]} rows × {X_fused.shape[1]} cols.")
+        st.success(f"✓ Fused summary built: {X_fused.shape[0]} rows × {X_fused.shape[1]} cols.")
 
 # ---------------------------------------------------------------------
-# Previews
+# Results Display (only shown after Generate is clicked)
 # ---------------------------------------------------------------------
-st.subheader("Current settings (saved / last run)")
-if "pf_controls_saved" in st.session_state:
-    st.caption("Saved settings:")
-    st.json(st.session_state["pf_controls_saved"])
-if "pf_controls_run" in st.session_state:
-    st.caption("Last run settings:")
-    st.json(st.session_state["pf_controls_run"])
-if "pf_controls_saved" not in st.session_state and "pf_controls_run" not in st.session_state:
-    st.info("Adjust controls in the sidebar, then click 'Generate Fused Summary' or 'Save Fused Settings'.")
-
-st.subheader("Profiles (base) — preview")
-if "pf_profiles_base" in st.session_state:
-    st.dataframe(st.session_state["pf_profiles_base"].head(12), width="content")
-    meta = st.session_state.get("pf_profiles_meta", {})
-    st.caption(f"Total base profiles: {meta.get('n_profiles_base', 'NA')}")
-
-if st.session_state.get("pf_profiles_by_zip") is not None:
-    st.subheader("Profiles × ZIP (split path) — preview")
-    st.dataframe(st.session_state["pf_profiles_by_zip"].head(12), width="content")
-    meta = st.session_state.get("pf_profiles_meta", {})
-    st.caption(f"Total profiles×ZIP: {meta.get('n_profiles_by_zip', 'NA')}")
-elif st.session_state.get("pf_zip_counts") is not None:
-    st.subheader("ZIP distribution per base profile (aggregate path) — preview")
-    st.dataframe(st.session_state["pf_zip_counts"].head(12), width="content")
-    st.caption("Used to compute weighted ZIP features per profile.")
-
-st.subheader("Fused feature matrix — summary")
-meta = st.session_state.get("pf_fused_meta", {})
-if meta:
-    st.write(meta)
-    st.write({
-        "patient_block_cols": len(st.session_state.get("pf_patient_block_cols", [])),
-        "zip_block_cols": len(st.session_state.get("pf_zip_block_cols", [])),
-    })
-
-st.subheader("Fused table (head)")
-ft = st.session_state.get("pf_fused_table")
-if ft is not None:
-    st.dataframe(ft.head(12), width="content")
+if generate_clicked or "pf_profiles_base" in st.session_state:
+    st.divider()
+    st.header("Fusion Results")
+    
+    # --- Current settings ---
+    st.subheader("Current Settings")
+    col_set1, col_set2 = st.columns(2)
+    
+    with col_set1:
+        if "pf_controls_saved" in st.session_state:
+            st.caption("**Saved Settings**")
+            saved = st.session_state["pf_controls_saved"]
+            saved_df = pd.DataFrame([
+                {"Parameter": "Selected Columns", "Value": ", ".join(saved["selected_cols"]) if saved["selected_cols"] else "None"},
+                {"Parameter": "ZIP Features", "Value": ", ".join([k for k, v in saved["zip_features"].items() if v])},
+                {"Parameter": "Split by ZIP", "Value": "Yes" if saved["split_by_zip"] else "No"},
+            ])
+            st.dataframe(saved_df, width='stretch', hide_index=True)
+    
+    with col_set2:
+        if "pf_controls_run" in st.session_state:
+            st.caption("**Last Run Settings**")
+            run = st.session_state["pf_controls_run"]
+            run_df = pd.DataFrame([
+                {"Parameter": "Selected Columns", "Value": ", ".join(run["selected_cols"]) if run["selected_cols"] else "None"},
+                {"Parameter": "ZIP Features", "Value": ", ".join([k for k, v in run["zip_features"].items() if v])},
+                {"Parameter": "Split by ZIP", "Value": "Yes" if run["split_by_zip"] else "No"},
+            ])
+            st.dataframe(run_df, width='stretch', hide_index=True)
+    
+    if "pf_controls_saved" not in st.session_state and "pf_controls_run" not in st.session_state:
+        st.info("Configure settings above and click 'Generate Fused Data' or 'Save Fused Settings'.")
+    
+    # --- Fused feature matrix summary ---
+    st.subheader("Fused Feature Matrix — Summary")
+    meta = st.session_state.get("pf_fused_meta", {})
+    if meta:
+        summary_df = pd.DataFrame([
+            {"Metric": "Total Rows", "Value": meta.get("rows", "N/A")},
+            {"Metric": "Total Columns", "Value": meta.get("cols_total", "N/A")},
+            {"Metric": "Patient Block Columns", "Value": meta.get("cols_patient", "N/A")},
+            {"Metric": "ZIP Block Columns", "Value": meta.get("cols_zip", "N/A")},
+            # {"Metric": "Key ID Column", "Value": meta.get("key_id_col", "N/A")},
+            {"Metric": "Use Split", "Value": "Yes" if meta.get("use_split") else "No"},
+            # {"Metric": "Join Key", "Value": meta.get("join_key", "N/A")},
+        ])
+        st.dataframe(summary_df, width='content', hide_index=True)
+        
+        # Block details
+        col_block1, col_block2 = st.columns(2)
+        with col_block1:
+            st.caption("**Patient Block Columns**")
+            patient_cols = st.session_state.get("pf_patient_block_cols", [])
+            if patient_cols:
+                st.text(f"Count: {len(patient_cols)}")
+                st.caption(", ".join(patient_cols[:10]) + ("..." if len(patient_cols) > 10 else ""))
+        
+        with col_block2:
+            st.caption("**ZIP Block Columns**")
+            zip_cols = st.session_state.get("pf_zip_block_cols", [])
+            if zip_cols:
+                st.text(f"Count: {len(zip_cols)}")
+                st.caption(", ".join(zip_cols))
+    
+    # --- Fused table preview ---
+    st.subheader("Fused Table — Preview")
+    ft = st.session_state.get("pf_fused_table")
+    if ft is not None:
+        st.dataframe(ft.head(12), width='content', hide_index=True)
