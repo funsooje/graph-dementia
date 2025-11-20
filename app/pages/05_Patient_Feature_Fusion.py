@@ -65,6 +65,30 @@ def _safe_merge(left: pd.DataFrame, right: pd.DataFrame, on: str, how: str = "le
     return L.merge(R, on=on, how=how)
 
 # ---------------------------------------------------------------------
+# Initialize session state defaults
+# ---------------------------------------------------------------------
+if "pf_selected_demo" not in st.session_state:
+    st.session_state["pf_selected_demo"] = []
+if "pf_selected_util" not in st.session_state:
+    st.session_state["pf_selected_util"] = []
+if "pf_selected_risk" not in st.session_state:
+    st.session_state["pf_selected_risk"] = []
+if "pf_use_env" not in st.session_state:
+    st.session_state["pf_use_env"] = True
+if "pf_use_ses" not in st.session_state:
+    st.session_state["pf_use_ses"] = True
+if "pf_use_degree" not in st.session_state:
+    st.session_state["pf_use_degree"] = False
+if "pf_use_pr" not in st.session_state:
+    st.session_state["pf_use_pr"] = False
+if "pf_use_btw" not in st.session_state:
+    st.session_state["pf_use_btw"] = False
+if "pf_onehot_comm" not in st.session_state:
+    st.session_state["pf_onehot_comm"] = False
+if "pf_split_by_zip" not in st.session_state:
+    st.session_state["pf_split_by_zip"] = False
+
+# ---------------------------------------------------------------------
 # Main page controls
 # ---------------------------------------------------------------------
 st.header("Configuration")
@@ -84,22 +108,30 @@ with col1:
     st.markdown("**Demographics**")
     selected_demo = []
     for col in demo_cols:
-        if st.checkbox(col, key=f"demo_{col}", value=False):
+        checked = st.checkbox(col, key=f"demo_{col}", value=(col in st.session_state["pf_selected_demo"]))
+        if checked:
             selected_demo.append(col)
 
 with col2:
     st.markdown("**Utilization**")
     selected_util = []
     for col in util_cols:
-        if st.checkbox(col, key=f"util_{col}", value=False):
+        checked = st.checkbox(col, key=f"util_{col}", value=(col in st.session_state["pf_selected_util"]))
+        if checked:
             selected_util.append(col)
 
 with col3:
     st.markdown("**Risk Binaries**")
     selected_risk = []
     for col in risk_cols:
-        if st.checkbox(col, key=f"risk_{col}", value=False):
+        checked = st.checkbox(col, key=f"risk_{col}", value=(col in st.session_state["pf_selected_risk"]))
+        if checked:
             selected_risk.append(col)
+
+# Update session state with current selections
+st.session_state["pf_selected_demo"] = selected_demo
+st.session_state["pf_selected_util"] = selected_util
+st.session_state["pf_selected_risk"] = selected_risk
 
 # Combine all selected columns
 selected_cols = selected_demo + selected_util + selected_risk
@@ -113,16 +145,24 @@ st.caption("Select ZIP-level features to include in fusion")
 zip_col1, zip_col2, zip_col3 = st.columns(3)
 
 with zip_col1:
-    use_env = st.checkbox("environment_index", value=True, key="zip_env")
-    use_ses = st.checkbox("ses_index", value=True, key="zip_ses")
+    use_env = st.checkbox("environment_index", value=st.session_state["pf_use_env"], key="zip_env")
+    use_ses = st.checkbox("ses_index", value=st.session_state["pf_use_ses"], key="zip_ses")
 
 with zip_col2:
-    use_degree = st.checkbox("zip_degree", value=False, key="zip_degree")
-    use_pr = st.checkbox("zip_pagerank", value=False, key="zip_pr")
+    use_degree = st.checkbox("zip_degree", value=st.session_state["pf_use_degree"], key="zip_degree")
+    use_pr = st.checkbox("zip_pagerank", value=st.session_state["pf_use_pr"], key="zip_pr")
 
 with zip_col3:
-    use_btw = st.checkbox("zip_betweenness", value=False, key="zip_btw")
-    onehot_comm = st.checkbox("one-hot zip_community (split path only)", value=False, key="zip_onehot")
+    use_btw = st.checkbox("zip_betweenness", value=st.session_state["pf_use_btw"], key="zip_btw")
+    onehot_comm = st.checkbox("one-hot zip_community (split path only)", value=st.session_state["pf_onehot_comm"], key="zip_onehot")
+
+# Update session state
+st.session_state["pf_use_env"] = use_env
+st.session_state["pf_use_ses"] = use_ses
+st.session_state["pf_use_degree"] = use_degree
+st.session_state["pf_use_pr"] = use_pr
+st.session_state["pf_use_btw"] = use_btw
+st.session_state["pf_onehot_comm"] = onehot_comm
 
 st.divider()
 
@@ -130,22 +170,20 @@ st.divider()
 st.subheader("3. ZIP Handling")
 st.caption("Choose how to handle ZIP features when ZIPCODE is not in profile columns")
 
-split_by_zip = st.toggle("Split profiles by ZIP", value=False, key="zip_split",
+split_by_zip = st.toggle("Split profiles by ZIP", value=st.session_state["pf_split_by_zip"], key="zip_split",
                          help="ON: Create separate profiles for each ZIP (profile × ZIP). OFF: Aggregate ZIP features across patients.")
+st.session_state["pf_split_by_zip"] = split_by_zip
 
 st.divider()
 
-# --- 4. Action Buttons ---
-col_btn1, col_btn2, _ = st.columns([1, 1, 3])
-with col_btn1:
-    generate_clicked = st.button("Generate Fused Data", type="primary", width='stretch')
-with col_btn2:
-    save_settings_clicked = st.button("Save Fused Settings", width='stretch')
+# --- 4. Action Button ---
+generate_clicked = st.button("Generate Fused Data", type="primary", use_container_width=False)
 
 # ---------------------------------------------------------------------
-# Save settings (config only; no computation)
+# Generate Fused Data (combines computation + save settings)
 # ---------------------------------------------------------------------
-if save_settings_clicked:
+if generate_clicked:
+    # Save settings first
     st.session_state["pf_controls_saved"] = {
         "selected_cols": selected_cols,
         "zip_features": {
@@ -158,12 +196,6 @@ if save_settings_clicked:
         },
         "split_by_zip": split_by_zip,
     }
-    st.success("✓ Settings saved to session_state['pf_controls_saved'].")
-
-# ---------------------------------------------------------------------
-# Generate Fused Summary (Steps 2 + 3; no graph/weights)
-# ---------------------------------------------------------------------
-if generate_clicked:
     # Traceability for this run
     st.session_state["pf_controls_run"] = {
         "selected_cols": selected_cols,
@@ -325,7 +357,7 @@ if generate_clicked:
             "join_key": join_key,
         }
 
-        st.success(f"✓ Fused summary built: {X_fused.shape[0]} rows × {X_fused.shape[1]} cols.")
+        st.success(f"✓ Fused data generated and saved: {X_fused.shape[0]} rows × {X_fused.shape[1]} cols.")
 
 # ---------------------------------------------------------------------
 # Results Display (only shown after Generate is clicked)

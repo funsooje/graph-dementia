@@ -105,119 +105,154 @@ if zip_cols is None:
 
 if missing:
     st.error(
-        "Missing required inputs from Page 03: "
+        "Missing required inputs from Page 05: "
         + ", ".join(missing)
-        + ". Go to page 03 and click 'Generate Fused Summary'."
+        + ". Go to page 05 and click 'Generate Fused Data'."
     )
     st.stop()
 
 # Quick preflight summary (no heavy work)
-st.subheader("Inputs summary")
+st.subheader("Inputs Summary")
 n_rows, n_cols = (X_fused.shape if isinstance(X_fused, np.ndarray) else (None, None))
-st.write({
-    "fused_matrix_shape": (n_rows, n_cols),
-    "fused_table_rows": len(tbl_fused),
-    "patient_block_cols": len(pat_cols),
-    "zip_block_cols": len(zip_cols),
-    "index_len": len(idx_fused),
-})
+inputs_df = pd.DataFrame([
+    {"Metric": "Fused Matrix Shape", "Value": f"{n_rows} × {n_cols}"},
+    {"Metric": "Fused Table Rows", "Value": len(tbl_fused)},
+    {"Metric": "Patient Block Cols", "Value": len(pat_cols)},
+    {"Metric": "ZIP Block Cols", "Value": len(zip_cols)},
+    {"Metric": "Index Length", "Value": len(idx_fused)},
+])
+st.dataframe(inputs_df, use_container_width=True, hide_index=True)
+
+st.divider()
 
 # ---------------------------------------------------------------------
-# Phase 1 — Sidebar controls (no computation yet)
+# Initialize session state defaults
 # ---------------------------------------------------------------------
-with st.sidebar:
-    st.header("Settings")
+if "patient_block_weight" not in st.session_state:
+    st.session_state["patient_block_weight"] = 0.70
+if "zip_block_weight" not in st.session_state:
+    st.session_state["zip_block_weight"] = 0.30
+if "patient_graph_k" not in st.session_state:
+    st.session_state["patient_graph_k"] = 3
+if "patient_knn_type" not in st.session_state:
+    st.session_state["patient_knn_type"] = "mutual"
+if "patient_graph_layout" not in st.session_state:
+    st.session_state["patient_graph_layout"] = "spring"
+if "patient_sim_threshold" not in st.session_state:
+    st.session_state["patient_sim_threshold"] = SIM_BACKEND_THRESHOLD
+if "patient_plot_threshold" not in st.session_state:
+    st.session_state["patient_plot_threshold"] = PLOT_GRAPH_THRESHOLD
+if "patient_btw_mode" not in st.session_state:
+    st.session_state["patient_btw_mode"] = "auto"
+if "patient_btw_k" not in st.session_state:
+    st.session_state["patient_btw_k"] = 400
+if "scatter_color_by" not in st.session_state:
+    st.session_state["scatter_color_by"] = "profile_community"
 
-    # --- Weights ---
-    st.subheader("Block weights")
-    default_pw = float(st.session_state.get("patient_block_weight", 0.70))
-    default_zw = float(st.session_state.get("zip_block_weight", 0.30))
-    col_w1, col_w2 = st.columns(2)
-    with col_w1:
-        patient_w = st.slider("Patient block", 0.0, 1.0, value=default_pw, step=0.05)
-    with col_w2:
-        zip_w = st.slider("ZIP block", 0.0, 1.0, value=default_zw, step=0.05)
-    st.caption(f"Sum: {patient_w + zip_w:.2f} (weights are scalars applied to blocks; they need not sum to 1).")
+# ---------------------------------------------------------------------
+# Main page controls
+# ---------------------------------------------------------------------
+st.header("Configuration")
 
-    # --- Graph options ---
-    st.subheader("Graph options")
-    default_k = int(st.session_state.get("patient_graph_k", 3))
+# --- 1. Block Weights + Graph Options (merged into 4 columns) ---
+st.subheader("1. Weights & Graph Options")
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    # Get default from session state
+    default_zip_w = float(st.session_state["zip_block_weight"])
+    weight_balance = st.slider(
+        "Weight balance (Patient ← → ZIP)",
+        min_value=0.0,
+        max_value=1.0,
+        value=default_zip_w,
+        step=0.05,
+        help="0.0 = 100% Patient, 1.0 = 100% ZIP"
+    )
+    # Calculate individual weights
+    patient_w = 1.0 - weight_balance
+    zip_w = weight_balance
+    st.caption(f"Patient: {patient_w:.2f} | ZIP: {zip_w:.2f}")
+
+with col2:
+    default_k = int(st.session_state["patient_graph_k"])
     k = st.number_input("k (k-NN)", min_value=1, max_value=50, value=default_k, step=1)
 
+with col3:
     knn_type_map = {"Mutual k-NN (undirected)": "mutual", "Directed k-NN": "directed"}
-    default_knn = st.session_state.get("patient_knn_type", "mutual")
+    default_knn = st.session_state["patient_knn_type"]
     knn_label_default = {v: k for k, v in knn_type_map.items()}.get(default_knn, "Mutual k-NN (undirected)")
-    knn_label = st.selectbox("k-NN type", list(knn_type_map.keys()), index=list(knn_type_map.keys()).index(knn_label_default))
+    knn_label = st.selectbox("k-NN type", list(knn_type_map.keys()), 
+                             index=list(knn_type_map.keys()).index(knn_label_default))
     knn_type = knn_type_map[knn_label]
 
-    default_layout = st.session_state.get("patient_graph_layout", "spring")
+with col4:
+    default_layout = st.session_state["patient_graph_layout"]
     layout = st.selectbox(
         "Layout",
         ["spring", "kamada", "circular", "random", "shell"],
         index=["spring", "kamada", "circular", "random", "shell"].index(default_layout),
     )
 
-    # --- Performance thresholds ---
-    st.subheader("Performance thresholds")
+st.divider()
+
+# --- 2. Performance, Metrics, and Scatter Coloring (merged into 5 columns) ---
+st.subheader("2. Performance, Metrics & Display Options")
+
+col1, col2, col3, col4, col5 = st.columns(5)
+
+with col1:
     sim_thresh = st.number_input(
-        "ANN switch threshold (use ANN when n >)",
+        "ANN switch threshold",
         min_value=1000, max_value=100000, step=500,
-        value=int(st.session_state.get("patient_sim_threshold", SIM_BACKEND_THRESHOLD))
-    )
-    plot_thresh = st.number_input(
-        "Plotting threshold (skip network when n >)",
-        min_value=200, max_value=100000, step=200,
-        value=int(st.session_state.get("patient_plot_threshold", PLOT_GRAPH_THRESHOLD))
+        value=int(st.session_state["patient_sim_threshold"]),
+        help="Switch to ANN when n > threshold"
     )
 
-    # --- Metric options ---
-    st.subheader("Metric options")
+with col2:
+    plot_thresh = st.number_input(
+        "Plot threshold",
+        min_value=200, max_value=100000, step=200,
+        value=int(st.session_state["patient_plot_threshold"]),
+        help="Skip network plot when n > threshold"
+    )
+
+with col3:
     btw_mode_label = st.selectbox(
         "Betweenness mode",
         ["Auto (approx if large)", "Approximate", "Exact", "Skip"],
         index=0,
-        help="Exact betweenness on large graphs is slow. 'Auto' uses approximate when n is large."
+        help="Exact is slow on large graphs"
     )
+
+with col4:
     btw_sample_k = st.number_input(
-        "Approx. betweenness samples (k)",
+        "Betweenness samples",
         min_value=50, max_value=5000, step=50,
-        value=int(st.session_state.get("patient_btw_k", 400)),
-        help="Number of random source nodes for approximate betweenness."
+        value=int(st.session_state["patient_btw_k"]),
+        help="Samples for approximate betweenness"
     )
 
-    # --- Scatter coloring ---
-    st.subheader("Scatter coloring")
-
+with col5:
     # Heuristic candidates
     cat_low_card = [
         c for c in tbl_fused.columns
         if (tbl_fused[c].dtype == "object" or pd.api.types.is_categorical_dtype(tbl_fused[c]) or pd.api.types.is_string_dtype(tbl_fused[c]))
         and tbl_fused[c].nunique(dropna=True) <= 30
     ]
-
+    
     numeric_candidates = [c for c in ["profile_count", "environment_index", "ses_index"] if c in tbl_fused.columns]
-
+    
     color_by_options = ["profile_community"] + sorted(set(cat_low_card + numeric_candidates))
-    default_color_by = st.session_state.get("scatter_color_by", "profile_community")
-    color_by = st.selectbox("Color PCA by", options=color_by_options,
+    default_color_by = st.session_state["scatter_color_by"]
+    color_by = st.selectbox("Scatter color by", options=color_by_options,
                             index=color_by_options.index(default_color_by) if default_color_by in color_by_options else 0)
 
-    # persist
-    st.session_state["scatter_color_by"] = color_by
+st.divider()
 
-    # --- Actions ---
-    st.subheader("Actions")
-    col_b1, col_b2, col_b3 = st.columns(3)
-    with col_b1:
-        recompute_clicked = st.button("Recompute graph")
-    with col_b2:
-        update_plots_clicked = st.button("Update plots")
-    with col_b3:
-        set_active_clicked = st.button("Set as patient graph")
-
-    # Terminal-only verbose logging toggle
-    verbose = st.checkbox("Verbose server logging (terminal)", value=False, help="Toggles DEBUG logs in terminal only.")
-    LOGGER.setLevel(logging.DEBUG if verbose else logging.INFO)
+# --- 3. Action Button ---
+generate_clicked = st.button("Generate Graph", type="primary", use_container_width=False)
 
 # Persist selections to session_state
 st.session_state["patient_block_weight"] = float(patient_w)
@@ -227,6 +262,7 @@ st.session_state["patient_knn_type"] = knn_type
 st.session_state["patient_graph_layout"] = layout
 st.session_state["patient_sim_threshold"] = int(sim_thresh)
 st.session_state["patient_plot_threshold"] = int(plot_thresh)
+st.session_state["scatter_color_by"] = color_by
 
 st.session_state["patient_btw_mode"] = (
     "auto" if btw_mode_label.startswith("Auto") else
@@ -435,9 +471,9 @@ graph_cache_key = (
 )
 
 # ---------------------------------------------------------------------
-# Recompute graph (Phase 2 + 3) and render figures
+# Generate graph (Phase 2 + 3), render figures, and set as active
 # ---------------------------------------------------------------------
-if recompute_clicked:
+if generate_clicked:
     LOGGER.info("[RUN] Recompute clicked")
     # Phase 2: weighted view
     X_weighted = build_weighted_matrix(
@@ -449,13 +485,6 @@ if recompute_clicked:
     )
 
     LOGGER.info(f"[RUN] Weighted matrix built: shape={X_weighted.shape}, pw={st.session_state['patient_block_weight']:.2f}, zw={st.session_state['zip_block_weight']:.2f}")
-
-    st.subheader("Weighted features preview")
-    st.write({
-        "X_weighted_shape": X_weighted.shape,
-        "patient_w": st.session_state["patient_block_weight"],
-        "zip_w": st.session_state["zip_block_weight"],
-    })
 
     # Phase 3: neighbors (ANN or exact) + graph
     idxs, sims, sim_full = topk_ann_or_exact(
@@ -508,7 +537,8 @@ if recompute_clicked:
     # Always compute scatter (depends only on weights).
     sc_path = PATIENT_FIG_DIR / (
         f"scatter_pw{st.session_state['patient_block_weight']:.2f}_"
-        f"zw{st.session_state['zip_block_weight']:.2f}.png"
+        f"zw{st.session_state['zip_block_weight']:.2f}_"
+        f"color{st.session_state.get('scatter_color_by', 'profile_community')}.png"
     )
     LOGGER.info("[PLOT] Rendering scatter (PCA 2D) figure")
     fig_scatter = plot_profile_scatter_embed(
@@ -555,10 +585,43 @@ if recompute_clicked:
         if network_key in fig_cache["network"]:
             del fig_cache["network"][network_key]
 
-    st.success("Graph recomputed and plots updated.")
+    # Set as active graph
+    st.session_state["active_patient_graph"] = {
+        "settings": {
+            "k": int(st.session_state["patient_graph_k"]),
+            "knn_type": st.session_state["patient_knn_type"],
+            "layout": st.session_state["patient_graph_layout"],
+            "patient_weight": float(st.session_state["patient_block_weight"]),
+            "zip_weight": float(st.session_state["zip_block_weight"]),
+            "ann_threshold": int(st.session_state.get("patient_sim_threshold", SIM_BACKEND_THRESHOLD)),
+            "plot_threshold": int(st.session_state.get("patient_plot_threshold", PLOT_GRAPH_THRESHOLD)),
+            "ann_available": bool(HAS_PYNNDESCENT),
+        },
+        "graph": graph_cache[graph_cache_key]["graph"],
+        "features": graph_cache[graph_cache_key]["features"],
+        "network_png": fig_cache["network"].get(network_key, {}).get("path"),
+        "scatter_png": fig_cache["scatter"].get(scatter_key, {}).get("path"),
+        "similarity_npy": graph_cache[graph_cache_key].get("sim_path"),
+    }
+    LOGGER.info("[RUN] Active patient graph stored in session_state['active_patient_graph']")
+    
+    st.success("✓ Graph generated, plots updated, and set as active.")
 
+    # --- Current Settings ---
+    st.subheader("Current Settings")
+    settings_df = pd.DataFrame([
+        {"Setting": "Patient Block Weight", "Value": f"{st.session_state['patient_block_weight']:.2f}"},
+        {"Setting": "ZIP Block Weight", "Value": f"{st.session_state['zip_block_weight']:.2f}"},
+        {"Setting": "k", "Value": st.session_state["patient_graph_k"]},
+        {"Setting": "k-NN Type", "Value": st.session_state["patient_knn_type"]},
+        {"Setting": "Layout", "Value": st.session_state["patient_graph_layout"]},
+        {"Setting": "Color By", "Value": st.session_state.get("scatter_color_by", "profile_community")},
+    ])
+    st.dataframe(settings_df, width='content', hide_index=True)
+    
     # Summary
-    st.subheader("Graph summary")
+    st.divider()
+    st.subheader("Graph Summary")
 
     # Always work on an undirected projection for structure stats
     G_u = G.to_undirected() if G.is_directed() else G
@@ -588,226 +651,93 @@ if recompute_clicked:
     # Average degree (total degree for DiGraph, standard for Graph)
     avg_degree = float(np.mean([d for _, d in G.degree(weight=None)])) if G.number_of_nodes() > 0 else 0.0
 
-    # Inter-community “overlap” (dominant neighboring community ties) for top communities
-    # Define community size by patient count if available, else by profile count
-    if "profile_community" in tbl.columns:
-        if "profile_count" in tbl.columns:
-            comm_sizes = tbl.groupby("profile_community")["profile_count"].sum()
-        else:
-            comm_sizes = tbl["profile_community"].value_counts()
-        # top communities (by size)
-        top_comms = comm_sizes.sort_values(ascending=False).head(5).index.tolist()
+    # Compose summary
+    summary_df = pd.DataFrame([
+        {"Metric": "Nodes", "Value": G.number_of_nodes()},
+        {"Metric": "Edges", "Value": G.number_of_edges()},
+        {"Metric": "k", "Value": int(st.session_state["patient_graph_k"])},
+        {"Metric": "k-NN Type", "Value": st.session_state["patient_knn_type"]},
+        {"Metric": "Connected", "Value": "Yes" if is_conn else "No"},
+        {"Metric": "Isolated Nodes", "Value": n_iso},
+        {"Metric": "Largest Component Size", "Value": largest_comp_size},
+        {"Metric": "Number of Communities", "Value": num_communities},
+        {"Metric": "Modularity", "Value": f"{modularity:.4f}" if modularity is not None else "N/A"},
+        {"Metric": "Average Degree", "Value": f"{avg_degree:.2f}"},
+        {"Metric": "Similarity Backend", "Value": "ANN (PyNNDescent)" if (X_fused.shape[0] > int(st.session_state.get("patient_sim_threshold", SIM_BACKEND_THRESHOLD)) and HAS_PYNNDESCENT) else "Exact cosine"},
+        # {"Metric": "Network Plot", "Value": "Rendered" if n <= int(st.session_state.get("patient_plot_threshold", PLOT_GRAPH_THRESHOLD)) else f"Skipped (n>{int(st.session_state.get('patient_plot_threshold', PLOT_GRAPH_THRESHOLD))})"},
+        {"Metric": "Betweenness Mode", "Value": st.session_state.get("patient_btw_mode", "auto")},
+    ])
+    st.dataframe(summary_df, width='content', hide_index=True)
 
-        # Build inter-community edge counts
-        inter_counts = {}
-        incident_totals = {}  # total inter-community edges touching each community
-        for u, v in G_u.edges():
-            cu, cv = partition.get(u, None), partition.get(v, None)
-            if cu is None or cv is None or cu == cv:
-                continue
-            a, b = (cu, cv) if cu <= cv else (cv, cu)
-            inter_counts[(a, b)] = inter_counts.get((a, b), 0) + 1
-            incident_totals[cu] = incident_totals.get(cu, 0) + 1
-            incident_totals[cv] = incident_totals.get(cv, 0) + 1
 
-        # For each top community, find the neighbor community with most ties
-        overlap_summary = {}
-        for c in top_comms:
-            # gather neighbors of c
-            neighbors = []
-            for (a, b), cnt in inter_counts.items():
-                if a == c:
-                    neighbors.append((b, cnt))
-                elif b == c:
-                    neighbors.append((a, cnt))
-            if neighbors:
-                neighbors.sort(key=lambda x: x[1], reverse=True)
-                nb, cnt = neighbors[0]
-                denom = max(incident_totals.get(c, 0), 1)
-                overlap_summary[int(c)] = {
-                    "dominant_neighbor": int(nb),
-                    "edges_to_neighbor": int(cnt),
-                    "share_of_inter_edges": float(cnt / denom),
-                }
-            else:
-                overlap_summary[int(c)] = {
-                    "dominant_neighbor": None,
-                    "edges_to_neighbor": 0,
-                    "share_of_inter_edges": 0.0,
-                }
+
+# ---------------------------------------------------------------------
+# Results Display (only shown after actions)
+# ---------------------------------------------------------------------
+if generate_clicked or graph_cache_key in graph_cache:
+    st.divider()
+    st.header("Results")
+
+
+
+    
+    # # --- Cache Status ---
+    # st.subheader("Cache Status")
+    # cache_df = pd.DataFrame([
+    #     {"Status": "Graph Cached", "Value": "Yes" if graph_cache_key in graph_cache else "No"},
+    #     {"Status": "Network Fig Cached", "Value": "Yes" if network_key in fig_cache["network"] else "No"},
+    #     {"Status": "Scatter Fig Cached", "Value": "Yes" if scatter_key in fig_cache["scatter"] else "No"},
+    #     {"Status": "Similarity Cached", "Value": "Yes" if (graph_cache_key in graph_cache and bool(graph_cache[graph_cache_key].get("sim_path"))) else "No"},
+    #     {"Status": "Similarity Path", "Value": graph_cache.get(graph_cache_key, {}).get("sim_path", "N/A")},
+    #     {"Status": "ANN Backend Available", "Value": "Yes" if HAS_PYNNDESCENT else "No"},
+    # ])
+    # st.dataframe(cache_df, use_container_width=True, hide_index=True)
+
+    # --- Images ---
+    if scatter_key in fig_cache["scatter"]:
+        st.subheader("Profiles PCA Scatter")
+        st.image(fig_cache["scatter"][scatter_key]["path"], width='content')
+        st.caption(f"Colored by: {st.session_state.get('scatter_color_by', 'profile_community')}")
     else:
-        overlap_summary = {}
-        comm_sizes = pd.Series(dtype=float)
+        st.info("Scatter image not cached yet. Click 'Recompute Graph' or 'Update Plots'.")
 
-    # Compose summary dict
-    summary_dict = {
-        "nodes": G.number_of_nodes(),
-        "edges": G.number_of_edges(),
-        "k": int(st.session_state["patient_graph_k"]),
-        "knn_type": st.session_state["patient_knn_type"],
-        "connected": is_conn,
-        "isolates": n_iso,
-        "largest_component_size": largest_comp_size,
-        "num_communities": num_communities,
-        "modularity": modularity,
-        "average_degree": avg_degree,
-        "backend": (
-            "ANN (PyNNDescent)"
-            if (X_fused.shape[0] > int(st.session_state.get("patient_sim_threshold", SIM_BACKEND_THRESHOLD)) and HAS_PYNNDESCENT)
-            else "Exact cosine"
-        ),
-        "plotting": (
-            "Full network"
-            if X_fused.shape[0] <= int(st.session_state.get("patient_plot_threshold", PLOT_GRAPH_THRESHOLD))
-            else f"Skipped (n>{int(st.session_state.get('patient_plot_threshold', PLOT_GRAPH_THRESHOLD))})"
-        ),
-        "betweenness_mode": st.session_state.get("patient_btw_mode", "auto"),
-        "betweenness_k": int(st.session_state.get("patient_btw_k", 400)),
-        # lightweight view of overlap for top communities
-        "overlap_top_comms": overlap_summary,
-    }
-
-    st.write(summary_dict)
-# ---------------------------------------------------------------------
-# Update plots from cached graph (no recompute)
-# ---------------------------------------------------------------------
-if update_plots_clicked:
-    LOGGER.info("[RUN] Update plots clicked")
-    if graph_cache_key not in graph_cache:
-        st.info("No cached graph for these settings. Click 'Recompute graph' first.")
+    if network_key in fig_cache["network"]:
+        st.subheader("Network Graph")
+        st.image(fig_cache["network"][network_key]["path"], width='content')
     else:
-        G = graph_cache[graph_cache_key]["graph"]
-        tbl = graph_cache[graph_cache_key]["features"]
-        n = G.number_of_nodes()
-
-        # SCATTER (weights-only). If missing, build weighted view quickly and cache.
-        if scatter_key not in fig_cache["scatter"]:
-            X_weighted = build_weighted_matrix(
-                X_fused=X_fused,
-                patient_cols=pat_cols,
-                zip_cols=zip_cols,
-                patient_w=st.session_state["patient_block_weight"],
-                zip_w=st.session_state["zip_block_weight"],
-            )
-            sc_path = PATIENT_FIG_DIR / (
-                f"scatter_pw{st.session_state['patient_block_weight']:.2f}_"
-                f"zw{st.session_state['zip_block_weight']:.2f}.png"
-            )
-            LOGGER.info("[PLOT] Regenerating scatter from cached graph")
-            fig_scatter = plot_profile_scatter_embed(
-                X_weighted,
-                tbl,
-                community_col="profile_community",
-                size_col="profile_count",
-                color_by=st.session_state.get("scatter_color_by", "profile_community"),
-                title="Profiles (PCA 2D, weighted features)",
-            )
-            fig_cache["scatter"][scatter_key] = {"path": fig_to_png_file(fig_scatter, sc_path)}
-
-        # NETWORK (layout-dependent) refresh only if allowed at this size
-        if n <= int(st.session_state.get("patient_plot_threshold", PLOT_GRAPH_THRESHOLD)):
-            net_path = PATIENT_FIG_DIR / (
-                f"net_k{st.session_state['patient_graph_k']}_"
-                f"{st.session_state['patient_knn_type']}_"
-                f"pw{st.session_state['patient_block_weight']:.2f}_"
-                f"zw{st.session_state['zip_block_weight']:.2f}_"
-                f"layout-{st.session_state['patient_graph_layout']}.png"
-            )
-            LOGGER.info("[PLOT] Regenerating network from cached graph")
-            fig_net = plot_networkx_graph(
-                G,
-                out_df=tbl,
-                node_size=20,
-                edge_width=0.9,
-                edge_alpha=0.5,
-                edge_color="gray",
-                community_col="profile_community",
-                size_col="profile_count",
-                title=(
-                    f"Profile graph: k={st.session_state['patient_graph_k']}, "
-                    f"{st.session_state['patient_knn_type']}, "
-                    f"weights (pat={st.session_state['patient_block_weight']:.2f}, "
-                    f"zip={st.session_state['zip_block_weight']:.2f})"
-                ),
-                layout=st.session_state["patient_graph_layout"],
-                scale_factor=4.0,
-            )
-            fig_cache["network"][network_key] = {"path": fig_to_png_file(fig_net, net_path)}
-        else:
-            if network_key in fig_cache["network"]:
-                del fig_cache["network"][network_key]
-            st.info(f"Graph plotting skipped (n>{int(st.session_state.get('patient_plot_threshold', PLOT_GRAPH_THRESHOLD))}).")
-
-        st.success("Plots updated from cached graph.")
-
-# ---------------------------------------------------------------------
-# Set active selection for downstream pages
-# ---------------------------------------------------------------------
-if set_active_clicked:
-    LOGGER.info("[RUN] Set active clicked")
-    if graph_cache_key not in graph_cache:
-        st.info("No cached graph to set active. Click 'Recompute graph' first.")
+        st.info(f"Network image not cached for this layout/settings or plotting was skipped (n>{int(st.session_state.get('patient_plot_threshold', PLOT_GRAPH_THRESHOLD))}).")
+    
+    # --- Download Data ---
+    st.divider()
+    st.subheader("Profile Data")
+    
+    if graph_cache_key in graph_cache:
+        tbl_download = graph_cache[graph_cache_key]["features"].copy()
+        
+        # Show preview of the data (first 10 rows)
+        st.caption("Preview (first 10 rows)")
+        st.dataframe(tbl_download.head(10), use_container_width=True, hide_index=True)
+        
+        # Data summary
+        col_info1, col_info2, col_info3 = st.columns(3)
+        with col_info1:
+            st.metric("Total Rows", len(tbl_download))
+        with col_info2:
+            st.metric("Total Columns", len(tbl_download.columns))
+        with col_info3:
+            graph_cols = [c for c in ["profile_community", "profile_betweenness", "profile_pagerank", "profile_degree"] if c in tbl_download.columns]
+            st.metric("Graph Metrics", len(graph_cols))
+        
+        # Download button
+        csv_data = tbl_download.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download as CSV",
+            data=csv_data,
+            file_name=f"patient_profiles_k{st.session_state['patient_graph_k']}_{st.session_state['patient_knn_type']}.csv",
+            mime="text/csv",
+            use_container_width=False
+        )
+        
+        st.caption(f"Includes all feature columns plus graph metrics: {', '.join(graph_cols)}")
     else:
-        st.session_state["active_patient_graph"] = {
-            "settings": {
-                "k": int(st.session_state["patient_graph_k"]),
-                "knn_type": st.session_state["patient_knn_type"],
-                "layout": st.session_state["patient_graph_layout"],
-                "patient_weight": float(st.session_state["patient_block_weight"]),
-                "zip_weight": float(st.session_state["zip_block_weight"]),
-                "ann_threshold": int(st.session_state.get("patient_sim_threshold", SIM_BACKEND_THRESHOLD)),
-                "plot_threshold": int(st.session_state.get("patient_plot_threshold", PLOT_GRAPH_THRESHOLD)),
-                "ann_available": bool(HAS_PYNNDESCENT),
-            },
-            "graph": graph_cache[graph_cache_key]["graph"],
-            "features": graph_cache[graph_cache_key]["features"],
-            "network_png": fig_cache["network"].get(network_key, {}).get("path"),
-            "scatter_png": fig_cache["scatter"].get(scatter_key, {}).get("path"),
-            "similarity_npy": graph_cache[graph_cache_key].get("sim_path"),
-        }
-        LOGGER.info("[RUN] Active patient graph stored in session_state['active_patient_graph']")
-        st.success("Current patient graph set as active.")
-
-# ---------------------------------------------------------------------
-# Outputs: cache status and images
-# ---------------------------------------------------------------------
-st.subheader("Cache status")
-st.write({
-    "graph_cached": graph_cache_key in graph_cache,
-    "network_fig_cached": network_key in fig_cache["network"],
-    "scatter_fig_cached": scatter_key in fig_cache["scatter"],
-    "similarity_cached": (graph_cache_key in graph_cache and bool(graph_cache[graph_cache_key].get("sim_path"))),
-    "similarity_path": (graph_cache.get(graph_cache_key, {}).get("sim_path")),
-    "ann_backend_available": HAS_PYNNDESCENT,
-})
-
-# Images
-if scatter_key in fig_cache["scatter"]:
-    st.subheader("Profiles PCA scatter (cached image)")
-    st.image(fig_cache["scatter"][scatter_key]["path"])
-    st.caption(f"PCA scatter colored by: {st.session_state.get('scatter_color_by', 'profile_community')}")
-else:
-    st.info("Scatter image not cached yet. Click 'Recompute graph' or 'Update plots'.")
-
-if network_key in fig_cache["network"]:
-    st.subheader("Network graph (cached image)")
-    st.image(fig_cache["network"][network_key]["path"])
-else:
-    st.info(f"Network image not cached for this layout/settings or plotting was skipped (n>{int(st.session_state.get('patient_plot_threshold', PLOT_GRAPH_THRESHOLD))}).")
-
-# ---------------------------------------------------------------------
-# Current control state (for transparency)
-# ---------------------------------------------------------------------
-st.subheader("Current control state")
-st.write({
-    "patient_block_weight": st.session_state["patient_block_weight"],
-    "zip_block_weight": st.session_state["zip_block_weight"],
-    "k": st.session_state["patient_graph_k"],
-    "knn_type": st.session_state["patient_knn_type"],
-    "layout": st.session_state["patient_graph_layout"],
-    "buttons": {
-        "recompute_clicked": 'clicked' if 'recompute_clicked' in locals() and recompute_clicked else 'idle',
-        "update_plots_clicked": 'clicked' if 'update_plots_clicked' in locals() and update_plots_clicked else 'idle',
-        "set_active_clicked": 'clicked' if 'set_active_clicked' in locals() and set_active_clicked else 'idle',
-    }
-})
+        st.info("Generate a graph first to download profile data.")
