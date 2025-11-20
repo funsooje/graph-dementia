@@ -32,7 +32,7 @@ from app._components.zip_context_utils import (
 # Page setup
 # ---------------------------------------------------------------------
 st.set_page_config(page_title="ZIP Context", layout="wide")
-st.title("02 - ZIP Context Mini-Analysis")
+st.title("ZIP Context Mini-Analysis")
 
 # ---------------------------------------------------------------------
 # Data

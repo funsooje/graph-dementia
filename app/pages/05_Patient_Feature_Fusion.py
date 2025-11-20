@@ -6,7 +6,7 @@ from sklearn.preprocessing import StandardScaler
 import hashlib
 
 st.set_page_config(page_title="Patient Feature Fusion (Profiles)", layout="wide")
-st.title("03 - Patient Feature Fusion (Profiles)")
+st.title("Patient Feature Fusion (Profiles)")
 
 # ---------------------------------------------------------------------
 # Data checks

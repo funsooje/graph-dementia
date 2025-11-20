@@ -8,7 +8,7 @@ import logging, sys, time, os
 from pandas.api.types import is_numeric_dtype
 
 st.set_page_config(page_title="Patient Community Summaries", layout="wide")
-st.title("05 - Patient Community Summaries")
+st.title("Patient Community Summaries")
 
 # ---------------------------- Logging ----------------------------
 if not st.session_state.get("pcs_logger_setup", False):
@@ -120,7 +120,10 @@ def _signatures(df: pd.DataFrame, risk_cols: list[str], delta: float = 0.05) -> 
             d = _wprev_bin(g[c], w) - gprev[c]
             if d >= delta:
                 rows.append({"community": cid, "feature": c, "delta": round(float(d), 4)})
-    return pd.DataFrame(rows).sort_values(["community", "delta"], ascending=[True, False])
+    result = pd.DataFrame(rows)
+    if result.empty:
+        return pd.DataFrame(columns=["community", "feature", "delta"])
+    return result.sort_values(["community", "delta"], ascending=[True, False])
 
 # ---------------------------- Sidebar ----------------------------
 with st.sidebar:

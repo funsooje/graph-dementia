@@ -43,7 +43,7 @@ def _elapsed(t0: float) -> str:
 # Page config
 # ---------------------------------------------------------------------
 st.set_page_config(page_title="Patient Profile Graphs", layout="wide")
-st.title("04 - Patient Profile Graphs")
+st.title("Patient Profile Graphs")
 
 # ---------------------------------------------------------------------
 # Constants (ANN + plotting gates)
