@@ -396,8 +396,12 @@ if selected_group_key in graph_cache:
     num_communities = int(out["zip_community"].nunique()) if "zip_community" in out.columns else 0
     # number of isolated nodes
     num_isolates = sum(1 for _ in nx.isolates(G))
-    # connected communities (excluding isolates which are singleton communities)
-    connected_communities = num_communities - num_isolates if num_communities >= num_isolates else num_communities
+    # non-isolated communities (excluding isolates which are singleton communities)
+    non_isolated_communities = num_communities - num_isolates if num_communities >= num_isolates else num_communities
+    # number of connected components in the graph
+    num_connected_components = nx.number_weakly_connected_components(G) if G.is_directed() else nx.number_connected_components(G)
+    # number of connected components excluding isolates
+    non_isolated_num_connected_components = num_connected_components - num_isolates
     # Extract modularity from the results dataframe (it's stored as a scalar column)
     modularity_val = out["modularity"].iloc[0] if "modularity" in out.columns else np.nan
     
@@ -405,8 +409,10 @@ if selected_group_key in graph_cache:
     graph_summary_dict = {
         "nodes": G.number_of_nodes(),
         "edges": G.number_of_edges(),
-        "num_communities": num_communities,
-        "connected_communities": connected_communities,
+        "n_communities": num_communities,
+        "non_isolated_communities": non_isolated_communities,
+        "n_components": num_connected_components,
+        "non_isolated_components": non_isolated_num_connected_components,
         "isolated_nodes": num_isolates,
         "resolution": resolution_val,
         "modularity": f"{modularity_val:.4f}" if not np.isnan(modularity_val) else "N/A",
