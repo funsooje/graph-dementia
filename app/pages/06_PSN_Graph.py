@@ -1,4 +1,4 @@
-# app/pages/04_Patient_Profile_Graphs.py
+# app/pages/06_PSN_Graph.py
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -22,7 +22,7 @@ from pynndescent import NNDescent
 HAS_PYNNDESCENT = True
 
 def _make_logger():
-    logger = logging.getLogger("patient_graphs")
+    logger = logging.getLogger("psn_graphs")
     if not logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
         fmt = logging.Formatter("[%(asctime)s] %(levelname)s %(message)s", datefmt="%H:%M:%S")
@@ -42,14 +42,15 @@ def _elapsed(t0: float) -> str:
 # ---------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------
-st.set_page_config(page_title="Patient Profile Graphs", layout="wide")
-st.title("Patient Profile Graphs")
+st.set_page_config(page_title="PSN Graph", layout="wide")
+st.title("PSN Graph")
 
 # ---------------------------------------------------------------------
 # Constants (ANN + plotting gates)
 # ---------------------------------------------------------------------
-SIM_BACKEND_THRESHOLD = 5000   # switch to ANN when n > this
-PLOT_GRAPH_THRESHOLD  = 3000   # skip full network plot when n > this
+SIM_BACKEND_THRESHOLD = 5000   # switch to ANN when n > this (for Auto mode)
+PLOT_GRAPH_THRESHOLD  = 500    # skip full network plot when n > this
+BTW_AUTO_THRESHOLD    = 5000   # switch to approximate betweenness when n >= this
 
 # ---------------------------------------------------------------------
 # Disk caches
@@ -100,14 +101,14 @@ if cnt_fused is None:
 if pat_cols is None:
     missing.append("pf_patient_block_cols")
 if zip_cols is None:
-    st.info("Notice: pf_zip_block_cols not found. ZIP block will default to zero columns.")
+    st.info("Notice: Neighborhood block columns not found. Will default to zero columns.")
     zip_cols = []
 
 if missing:
     st.error(
-        "Missing required inputs from Page 05: "
+        "Missing required inputs from PSN Feature Selection: "
         + ", ".join(missing)
-        + ". Go to page 05 and click 'Generate Fused Data'."
+        + ". Go to page 05 and click 'Generate PSN Features'."
     )
     st.stop()
 
@@ -115,10 +116,10 @@ if missing:
 st.subheader("Inputs Summary")
 n_rows, n_cols = (X_fused.shape if isinstance(X_fused, np.ndarray) else (None, None))
 inputs_df = pd.DataFrame([
-    {"Metric": "Fused Matrix Shape", "Value": f"{n_rows} × {n_cols}"},
-    {"Metric": "Fused Table Rows", "Value": len(tbl_fused)},
-    {"Metric": "Patient Block Cols", "Value": len(pat_cols)},
-    {"Metric": "ZIP Block Cols", "Value": len(zip_cols)},
+    {"Metric": "PSN Matrix Shape", "Value": f"{n_rows} × {n_cols}"},
+    {"Metric": "PSN Table Rows", "Value": len(tbl_fused)},
+    {"Metric": "Profile Block Cols", "Value": len(pat_cols)},
+    {"Metric": "Neighborhood Block Cols", "Value": len(zip_cols)},
     {"Metric": "Index Length", "Value": len(idx_fused)},
 ])
 st.dataframe(inputs_df, use_container_width=True, hide_index=True)
@@ -138,12 +139,16 @@ if "patient_knn_type" not in st.session_state:
     st.session_state["patient_knn_type"] = "mutual"
 if "patient_graph_layout" not in st.session_state:
     st.session_state["patient_graph_layout"] = "spring"
+if "patient_ann_mode" not in st.session_state:
+    st.session_state["patient_ann_mode"] = "auto"
 if "patient_sim_threshold" not in st.session_state:
     st.session_state["patient_sim_threshold"] = SIM_BACKEND_THRESHOLD
 if "patient_plot_threshold" not in st.session_state:
     st.session_state["patient_plot_threshold"] = PLOT_GRAPH_THRESHOLD
 if "patient_btw_mode" not in st.session_state:
     st.session_state["patient_btw_mode"] = "auto"
+if "patient_btw_threshold" not in st.session_state:
+    st.session_state["patient_btw_threshold"] = BTW_AUTO_THRESHOLD
 if "patient_btw_k" not in st.session_state:
     st.session_state["patient_btw_k"] = 400
 if "scatter_color_by" not in st.session_state:
@@ -154,26 +159,22 @@ if "scatter_color_by" not in st.session_state:
 # ---------------------------------------------------------------------
 st.header("Configuration")
 
-# --- 1. Block Weights + Graph Options (merged into 4 columns) ---
-st.subheader("1. Weights & Graph Options")
-
+# --- Core Graph Settings (always visible) ---
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    # Get default from session state
     default_zip_w = float(st.session_state["zip_block_weight"])
     weight_balance = st.slider(
-        "Weight balance (Patient ← → ZIP)",
+        "Weight balance (Profile ← → Neighborhood)",
         min_value=0.0,
         max_value=1.0,
         value=default_zip_w,
         step=0.05,
-        help="0.0 = 100% Patient, 1.0 = 100% ZIP"
+        help="0.0 = 100% Profile, 1.0 = 100% Neighborhood"
     )
-    # Calculate individual weights
     patient_w = 1.0 - weight_balance
     zip_w = weight_balance
-    st.caption(f"Patient: {patient_w:.2f} | ZIP: {zip_w:.2f}")
+    st.caption(f"Profile: {patient_w:.2f} | Neighborhood: {zip_w:.2f}")
 
 with col2:
     default_k = int(st.session_state["patient_graph_k"])
@@ -182,8 +183,8 @@ with col2:
 with col3:
     knn_type_map = {"Mutual k-NN (undirected)": "mutual", "Directed k-NN": "directed"}
     default_knn = st.session_state["patient_knn_type"]
-    knn_label_default = {v: k for k, v in knn_type_map.items()}.get(default_knn, "Mutual k-NN (undirected)")
-    knn_label = st.selectbox("k-NN type", list(knn_type_map.keys()), 
+    knn_label_default = {v: lbl for lbl, v in knn_type_map.items()}.get(default_knn, "Mutual k-NN (undirected)")
+    knn_label = st.selectbox("k-NN type", list(knn_type_map.keys()),
                              index=list(knn_type_map.keys()).index(knn_label_default))
     knn_type = knn_type_map[knn_label]
 
@@ -195,63 +196,101 @@ with col4:
         index=["spring", "kamada", "circular", "random", "shell"].index(default_layout),
     )
 
+# --- Similarity Settings (collapsible) ---
+with st.expander("Similarity Settings", expanded=False):
+    st.caption("Configure how profile similarity is computed")
+    sim_col1, sim_col2 = st.columns(2)
+
+    with sim_col1:
+        ann_mode_options = ["Auto (threshold)", "Force ANN", "Force Exact"]
+        ann_mode_default = st.session_state.get("patient_ann_mode", "auto")
+        ann_mode_idx = {"auto": 0, "force_ann": 1, "force_exact": 2}.get(ann_mode_default, 0)
+        ann_mode_label = st.selectbox(
+            "Similarity mode",
+            ann_mode_options,
+            index=ann_mode_idx,
+            help="Auto: use threshold; Force ANN: always approximate; Force Exact: always exact"
+        )
+
+    with sim_col2:
+        sim_thresh = st.number_input(
+            "ANN threshold (Auto only)",
+            min_value=1000, max_value=100000, step=500,
+            value=int(st.session_state["patient_sim_threshold"]),
+            help="Switch to ANN when n > threshold",
+            disabled=(ann_mode_label != "Auto (threshold)")
+        )
+
+# --- Betweenness Settings (collapsible) ---
+with st.expander("Betweenness Centrality Settings", expanded=False):
+    st.caption("Configure betweenness centrality computation (can be slow on large graphs)")
+    btw_col1, btw_col2, btw_col3 = st.columns(3)
+
+    with btw_col1:
+        btw_mode_options = ["Auto (threshold)", "Approximate", "Exact", "Skip"]
+        btw_mode_default = st.session_state.get("patient_btw_mode", "auto")
+        btw_mode_idx = {"auto": 0, "approx": 1, "exact": 2, "skip": 3}.get(btw_mode_default, 0)
+        btw_mode_label = st.selectbox(
+            "Betweenness mode",
+            btw_mode_options,
+            index=btw_mode_idx,
+            help="Auto: use threshold to decide; Exact is slow on large graphs"
+        )
+
+    with btw_col2:
+        btw_thresh = st.number_input(
+            "Betweenness threshold (Auto only)",
+            min_value=1000, max_value=100000, step=500,
+            value=int(st.session_state.get("patient_btw_threshold", BTW_AUTO_THRESHOLD)),
+            help="Use approximate when n >= threshold",
+            disabled=(btw_mode_label != "Auto (threshold)")
+        )
+
+    with btw_col3:
+        btw_sample_k = st.number_input(
+            "Betweenness samples",
+            min_value=50, max_value=5000, step=50,
+            value=int(st.session_state["patient_btw_k"]),
+            help="Number of source nodes for approximate betweenness"
+        )
+
+# --- Display Settings (collapsible) ---
+with st.expander("Display Settings", expanded=False):
+    st.caption("Configure visualization options")
+    disp_col1, disp_col2 = st.columns(2)
+
+    with disp_col1:
+        plot_thresh = st.number_input(
+            "Plot threshold",
+            min_value=100, max_value=100000, step=100,
+            value=int(st.session_state["patient_plot_threshold"]),
+            help="Skip network plot when n > threshold"
+        )
+
+    with disp_col2:
+        # Heuristic candidates for color options
+        cat_low_card = [
+            c for c in tbl_fused.columns
+            if (tbl_fused[c].dtype == "object" or
+                pd.api.types.is_categorical_dtype(tbl_fused[c]) or
+                pd.api.types.is_string_dtype(tbl_fused[c]))
+            and tbl_fused[c].nunique(dropna=True) <= 30
+        ]
+        numeric_candidates = [
+            c for c in ["profile_count", "environment_index", "ses_index"]
+            if c in tbl_fused.columns
+        ]
+        color_by_options = ["profile_community"] + sorted(set(cat_low_card + numeric_candidates))
+        default_color_by = st.session_state["scatter_color_by"]
+        color_by = st.selectbox(
+            "Scatter color by",
+            options=color_by_options,
+            index=color_by_options.index(default_color_by) if default_color_by in color_by_options else 0
+        )
+
 st.divider()
 
-# --- 2. Performance, Metrics, and Scatter Coloring (merged into 5 columns) ---
-st.subheader("2. Performance, Metrics & Display Options")
-
-col1, col2, col3, col4, col5 = st.columns(5)
-
-with col1:
-    sim_thresh = st.number_input(
-        "ANN switch threshold",
-        min_value=1000, max_value=100000, step=500,
-        value=int(st.session_state["patient_sim_threshold"]),
-        help="Switch to ANN when n > threshold"
-    )
-
-with col2:
-    plot_thresh = st.number_input(
-        "Plot threshold",
-        min_value=200, max_value=100000, step=200,
-        value=int(st.session_state["patient_plot_threshold"]),
-        help="Skip network plot when n > threshold"
-    )
-
-with col3:
-    btw_mode_label = st.selectbox(
-        "Betweenness mode",
-        ["Auto (approx if large)", "Approximate", "Exact", "Skip"],
-        index=0,
-        help="Exact is slow on large graphs"
-    )
-
-with col4:
-    btw_sample_k = st.number_input(
-        "Betweenness samples",
-        min_value=50, max_value=5000, step=50,
-        value=int(st.session_state["patient_btw_k"]),
-        help="Samples for approximate betweenness"
-    )
-
-with col5:
-    # Heuristic candidates
-    cat_low_card = [
-        c for c in tbl_fused.columns
-        if (tbl_fused[c].dtype == "object" or pd.api.types.is_categorical_dtype(tbl_fused[c]) or pd.api.types.is_string_dtype(tbl_fused[c]))
-        and tbl_fused[c].nunique(dropna=True) <= 30
-    ]
-    
-    numeric_candidates = [c for c in ["profile_count", "environment_index", "ses_index"] if c in tbl_fused.columns]
-    
-    color_by_options = ["profile_community"] + sorted(set(cat_low_card + numeric_candidates))
-    default_color_by = st.session_state["scatter_color_by"]
-    color_by = st.selectbox("Scatter color by", options=color_by_options,
-                            index=color_by_options.index(default_color_by) if default_color_by in color_by_options else 0)
-
-st.divider()
-
-# --- 3. Action Button ---
+# --- Action Button ---
 generate_clicked = st.button("Generate Graph", type="primary", use_container_width=False)
 
 # Persist selections to session_state
@@ -260,16 +299,25 @@ st.session_state["zip_block_weight"] = float(zip_w)
 st.session_state["patient_graph_k"] = int(k)
 st.session_state["patient_knn_type"] = knn_type
 st.session_state["patient_graph_layout"] = layout
-st.session_state["patient_sim_threshold"] = int(sim_thresh)
-st.session_state["patient_plot_threshold"] = int(plot_thresh)
 st.session_state["scatter_color_by"] = color_by
 
+# ANN mode
+st.session_state["patient_ann_mode"] = (
+    "auto" if ann_mode_label.startswith("Auto") else
+    "force_ann" if ann_mode_label.startswith("Force ANN") else
+    "force_exact"
+)
+st.session_state["patient_sim_threshold"] = int(sim_thresh)
+st.session_state["patient_plot_threshold"] = int(plot_thresh)
+
+# Betweenness mode
 st.session_state["patient_btw_mode"] = (
     "auto" if btw_mode_label.startswith("Auto") else
     "approx" if btw_mode_label.startswith("Approx") else
     "exact" if btw_mode_label.startswith("Exact") else
     "skip"
 )
+st.session_state["patient_btw_threshold"] = int(btw_thresh)
 st.session_state["patient_btw_k"] = int(btw_sample_k)
 
 # Build figure cache keys after persisting
@@ -335,15 +383,29 @@ def topk_exact_from_matrix(X: np.ndarray, k: int):
     LOGGER.info(f"[SIM] top-k selection done in {_elapsed(t1)} (total {_elapsed(t0)})")
     return idxs, sims, sim
 
-def topk_ann_or_exact(X: np.ndarray, k: int, sim_threshold: int):
+def topk_ann_or_exact(X: np.ndarray, k: int, ann_mode: str, sim_threshold: int):
     """
-    Use ANN (PyNNDescent) when n > sim_threshold and backend is available.
-    Otherwise, use exact cosine.
+    Use ANN (PyNNDescent) or exact cosine similarity.
+
+    Args:
+        ann_mode: "auto" (use threshold), "force_ann", or "force_exact"
+        sim_threshold: threshold for auto mode (use ANN when n > threshold)
+
     Returns (indices, sims, sim_matrix_or_None).
     """
     n, d = X.shape
-    LOGGER.info(f"[SIM] Backend chooser: n={n}, d={d}, k={k}, threshold={sim_threshold}, HAS_PYNNDESCENT={HAS_PYNNDESCENT}")
-    if n > sim_threshold and HAS_PYNNDESCENT:
+    LOGGER.info(f"[SIM] Backend: n={n}, d={d}, k={k}, mode={ann_mode}, threshold={sim_threshold}")
+
+    # Decide whether to use ANN
+    use_ann = False
+    if ann_mode == "force_ann" and HAS_PYNNDESCENT:
+        use_ann = True
+    elif ann_mode == "force_exact":
+        use_ann = False
+    elif ann_mode == "auto" and n > sim_threshold and HAS_PYNNDESCENT:
+        use_ann = True
+
+    if use_ann:
         t0 = time.perf_counter()
         LOGGER.info("[SIM] Using ANN (PyNNDescent, metric='cosine')")
         index = NNDescent(X, metric="cosine", n_neighbors=k+1, random_state=42)
@@ -406,11 +468,14 @@ def build_knn_graph_from_neighbors(topk_idx: np.ndarray, topk_sim: np.ndarray, k
     LOGGER.info(f"[GRAPH] Mutual graph edges={G.number_of_edges()} in {_elapsed(t0)}")
     return G
 
-def compute_graph_metrics(G: nx.Graph, btw_mode: str = "auto", btw_k: int = 400):
+def compute_graph_metrics(G: nx.Graph, btw_mode: str = "auto", btw_k: int = 400, btw_threshold: int = 5000):
     """
     - Communities: Louvain on undirected view
     - Betweenness: 'skip' | 'approx' (sampling with nx.betweenness_centrality k=...) | 'exact' | 'auto' (approx if large)
     - PageRank: directed if DiGraph, undirected otherwise
+
+    Args:
+        btw_threshold: threshold for auto mode (use approximate when n >= threshold)
     """
     n = G.number_of_nodes()
     m = G.number_of_edges()
@@ -426,7 +491,7 @@ def compute_graph_metrics(G: nx.Graph, btw_mode: str = "auto", btw_k: int = 400)
     # decide mode
     mode = btw_mode
     if btw_mode == "auto":
-        mode = "approx" if n >= 5000 else "exact"
+        mode = "approx" if n >= btw_threshold else "exact"
 
     if mode == "skip":
         LOGGER.info("[METRICS] Betweenness skipped")
@@ -490,7 +555,8 @@ if generate_clicked:
     idxs, sims, sim_full = topk_ann_or_exact(
         X_weighted,
         int(st.session_state["patient_graph_k"]),
-        int(st.session_state.get("patient_sim_threshold", SIM_BACKEND_THRESHOLD))
+        ann_mode=st.session_state.get("patient_ann_mode", "auto"),
+        sim_threshold=int(st.session_state.get("patient_sim_threshold", SIM_BACKEND_THRESHOLD))
     )
     LOGGER.info(f"[RUN] Neighbor lists ready; sim_full={'present' if sim_full is not None else 'None (ANN path)'}")
     if sim_full is not None:
@@ -515,6 +581,7 @@ if generate_clicked:
         G,
         btw_mode=st.session_state.get("patient_btw_mode", "auto"),
         btw_k=int(st.session_state.get("patient_btw_k", 400)),
+        btw_threshold=int(st.session_state.get("patient_btw_threshold", BTW_AUTO_THRESHOLD)),
     )
     LOGGER.info("[RUN] Metrics computed (partition, betweenness, pagerank, degree)")
 
@@ -605,13 +672,13 @@ if generate_clicked:
     }
     LOGGER.info("[RUN] Active patient graph stored in session_state['active_patient_graph']")
     
-    st.success("✓ Graph generated, plots updated, and set as active.")
+    st.success("PSN graph generated and set as active.")
 
     # --- Current Settings ---
     st.subheader("Current Settings")
     settings_df = pd.DataFrame([
-        {"Setting": "Patient Block Weight", "Value": f"{st.session_state['patient_block_weight']:.2f}"},
-        {"Setting": "ZIP Block Weight", "Value": f"{st.session_state['zip_block_weight']:.2f}"},
+        {"Setting": "Profile Block Weight", "Value": f"{st.session_state['patient_block_weight']:.2f}"},
+        {"Setting": "Neighborhood Block Weight", "Value": f"{st.session_state['zip_block_weight']:.2f}"},
         {"Setting": "k", "Value": st.session_state["patient_graph_k"]},
         {"Setting": "k-NN Type", "Value": st.session_state["patient_knn_type"]},
         {"Setting": "Layout", "Value": st.session_state["patient_graph_layout"]},
@@ -695,21 +762,22 @@ if generate_clicked or graph_cache_key in graph_cache:
 
     # --- Images ---
     if scatter_key in fig_cache["scatter"]:
-        st.subheader("Profiles PCA Scatter")
+        st.subheader("PSN PCA Scatter")
         st.image(fig_cache["scatter"][scatter_key]["path"], width='content')
         st.caption(f"Colored by: {st.session_state.get('scatter_color_by', 'profile_community')}")
     else:
-        st.info("Scatter image not cached yet. Click 'Recompute Graph' or 'Update Plots'.")
+        st.info("Scatter image not cached yet. Click 'Generate Graph'.")
 
     if network_key in fig_cache["network"]:
-        st.subheader("Network Graph")
+        st.subheader("PSN Network Graph")
         st.image(fig_cache["network"][network_key]["path"], width='content')
     else:
-        st.info(f"Network image not cached for this layout/settings or plotting was skipped (n>{int(st.session_state.get('patient_plot_threshold', PLOT_GRAPH_THRESHOLD))}).")
+        plot_thresh = int(st.session_state.get('patient_plot_threshold', PLOT_GRAPH_THRESHOLD))
+        st.info(f"Network image not cached or plotting skipped (n>{plot_thresh}).")
     
     # --- Download Data ---
     st.divider()
-    st.subheader("Profile Data")
+    st.subheader("PSN Data")
     
     if graph_cache_key in graph_cache:
         tbl_download = graph_cache[graph_cache_key]["features"].copy()
@@ -733,11 +801,11 @@ if generate_clicked or graph_cache_key in graph_cache:
         st.download_button(
             label="Download as CSV",
             data=csv_data,
-            file_name=f"patient_profiles_k{st.session_state['patient_graph_k']}_{st.session_state['patient_knn_type']}.csv",
+            file_name=f"psn_data_k{st.session_state['patient_graph_k']}_{st.session_state['patient_knn_type']}.csv",
             mime="text/csv",
             use_container_width=False
         )
         
         st.caption(f"Includes all feature columns plus graph metrics: {', '.join(graph_cols)}")
     else:
-        st.info("Generate a graph first to download profile data.")
+        st.info("Generate a graph first to download PSN data.")

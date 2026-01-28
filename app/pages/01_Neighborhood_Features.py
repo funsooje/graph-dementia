@@ -3,7 +3,7 @@ import os
 import json
 import pandas as pd
 
-st.title("ZIP Feature Groups Configuration")
+st.title("Neighborhood Features Configuration")
 
 if "zip_df" not in st.session_state:
     st.warning("Please run the previous page to load the ZIP dataframe first.")

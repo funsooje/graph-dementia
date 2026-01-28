@@ -1,12 +1,12 @@
-# app/pages/03_Patient_Feature_Fusion.py
+# app/pages/05_PSN_Feature_Selection.py
 import streamlit as st
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 import hashlib
 
-st.set_page_config(page_title="Patient Feature Fusion (Profiles)", layout="wide")
-st.title("Patient Feature Fusion (Profiles)")
+st.set_page_config(page_title="PSN Feature Selection", layout="wide")
+st.title("PSN Feature Selection")
 
 # ---------------------------------------------------------------------
 # Data checks
@@ -17,7 +17,7 @@ if pat is None:
     st.error("patients_df not found in session_state. Load on Home.")
     st.stop()
 if zip_feats_initial is None:
-    st.warning("zip_features not found in session_state. Run page 02 (ZIP Context) and click 'Set as ZIP features'.")
+    st.warning("Neighborhood features not found. Run page 02 (Neighborhood Graph) first.")
 
 # ---------------------------------------------------------------------
 # Groupings (binned/cleaned only)
@@ -138,9 +138,9 @@ selected_cols = selected_demo + selected_util + selected_risk
 
 st.divider()
 
-# --- 2. ZIP Context Features Section ---
-st.subheader("2. ZIP Context Features")
-st.caption("Select ZIP-level features to include in fusion")
+# --- 2. Neighborhood Features Section ---
+st.subheader("2. Neighborhood Features")
+st.caption("Select neighborhood-level features to include")
 
 zip_col1, zip_col2, zip_col3 = st.columns(3)
 
@@ -168,35 +168,24 @@ st.divider()
 
 # --- 3. ZIP Handling Section ---
 st.subheader("3. ZIP Handling")
-st.caption("Choose how to handle ZIP features when ZIPCODE is not in profile columns")
+st.caption("Choose how to handle neighborhood features when ZIPCODE is not in profile columns")
 
-split_by_zip = st.toggle("Split profiles by ZIP", value=st.session_state["pf_split_by_zip"], key="zip_split",
-                         help="ON: Create separate profiles for each ZIP (profile × ZIP). OFF: Aggregate ZIP features across patients.")
+split_by_zip = st.toggle(
+    "Split profiles by ZIP", value=st.session_state["pf_split_by_zip"], key="zip_split",
+    help="ON: Create separate profiles for each ZIP. OFF: Aggregate neighborhood features."
+)
 st.session_state["pf_split_by_zip"] = split_by_zip
 
 st.divider()
 
 # --- 4. Action Button ---
-generate_clicked = st.button("Generate Fused Data", type="primary", use_container_width=False)
+generate_clicked = st.button("Generate PSN Features", type="primary", use_container_width=False)
 
 # ---------------------------------------------------------------------
-# Generate Fused Data (combines computation + save settings)
+# Generate PSN Features (combines computation + save settings)
 # ---------------------------------------------------------------------
 if generate_clicked:
-    # Save settings first
-    st.session_state["pf_controls_saved"] = {
-        "selected_cols": selected_cols,
-        "zip_features": {
-            "environment_index": use_env,
-            "ses_index": use_ses,
-            "zip_degree": use_degree,
-            "zip_pagerank": use_pr,
-            "zip_betweenness": use_btw,
-            "onehot_zip_community": onehot_comm,
-        },
-        "split_by_zip": split_by_zip,
-    }
-    # Traceability for this run
+    # Store run settings
     st.session_state["pf_controls_run"] = {
         "selected_cols": selected_cols,
         "zip_features": {
@@ -259,7 +248,7 @@ if generate_clicked:
     # ===================== STEP 3: ZIP join + fused encoding =====================
     zip_feats = st.session_state.get("zip_features")
     if zip_feats is None:
-        st.warning("ZIP features not found. Go to page 02 and click 'Set as ZIP features'.")
+        st.warning("Neighborhood features not found. Go to page 02 (Neighborhood Graph) first.")
     else:
         use_split = (("ZIPCODE" in selected_cols) or split_by_zip)
 
@@ -357,53 +346,37 @@ if generate_clicked:
             "join_key": join_key,
         }
 
-        st.success(f"✓ Fused data generated and saved: {X_fused.shape[0]} rows × {X_fused.shape[1]} cols.")
+        st.success(f"PSN features generated: {X_fused.shape[0]} rows × {X_fused.shape[1]} cols.")
 
 # ---------------------------------------------------------------------
 # Results Display (only shown after Generate is clicked)
 # ---------------------------------------------------------------------
 if generate_clicked or "pf_profiles_base" in st.session_state:
     st.divider()
-    st.header("Fusion Results")
+    st.header("PSN Feature Results")
     
-    # --- Current settings ---
-    st.subheader("Current Settings")
-    col_set1, col_set2 = st.columns(2)
+    # --- Run settings ---
+    if "pf_controls_run" in st.session_state:
+        st.subheader("Run Settings")
+        run = st.session_state["pf_controls_run"]
+        settings_df = pd.DataFrame([
+            {"Parameter": "Profile Columns", "Value": ", ".join(run["selected_cols"]) if run["selected_cols"] else "None"},
+            {"Parameter": "Neighborhood Features", "Value": ", ".join([k for k, v in run["zip_features"].items() if v]) or "None"},
+            {"Parameter": "Split by ZIP", "Value": "Yes" if run["split_by_zip"] else "No"},
+        ])
+        st.dataframe(settings_df, use_container_width=False, hide_index=True)
+    else:
+        st.info("Configure settings above and click 'Generate PSN Features'.")
     
-    with col_set1:
-        if "pf_controls_saved" in st.session_state:
-            st.caption("**Saved Settings**")
-            saved = st.session_state["pf_controls_saved"]
-            saved_df = pd.DataFrame([
-                {"Parameter": "Selected Columns", "Value": ", ".join(saved["selected_cols"]) if saved["selected_cols"] else "None"},
-                {"Parameter": "ZIP Features", "Value": ", ".join([k for k, v in saved["zip_features"].items() if v])},
-                {"Parameter": "Split by ZIP", "Value": "Yes" if saved["split_by_zip"] else "No"},
-            ])
-            st.dataframe(saved_df, width='stretch', hide_index=True)
-    
-    with col_set2:
-        if "pf_controls_run" in st.session_state:
-            st.caption("**Last Run Settings**")
-            run = st.session_state["pf_controls_run"]
-            run_df = pd.DataFrame([
-                {"Parameter": "Selected Columns", "Value": ", ".join(run["selected_cols"]) if run["selected_cols"] else "None"},
-                {"Parameter": "ZIP Features", "Value": ", ".join([k for k, v in run["zip_features"].items() if v])},
-                {"Parameter": "Split by ZIP", "Value": "Yes" if run["split_by_zip"] else "No"},
-            ])
-            st.dataframe(run_df, width='stretch', hide_index=True)
-    
-    if "pf_controls_saved" not in st.session_state and "pf_controls_run" not in st.session_state:
-        st.info("Configure settings above and click 'Generate Fused Data' or 'Save Fused Settings'.")
-    
-    # --- Fused feature matrix summary ---
-    st.subheader("Fused Feature Matrix — Summary")
+    # --- PSN feature matrix summary ---
+    st.subheader("PSN Feature Matrix — Summary")
     meta = st.session_state.get("pf_fused_meta", {})
     if meta:
         summary_df = pd.DataFrame([
             {"Metric": "Total Rows", "Value": meta.get("rows", "N/A")},
             {"Metric": "Total Columns", "Value": meta.get("cols_total", "N/A")},
             {"Metric": "Patient Block Columns", "Value": meta.get("cols_patient", "N/A")},
-            {"Metric": "ZIP Block Columns", "Value": meta.get("cols_zip", "N/A")},
+            {"Metric": "Neighborhood Block Columns", "Value": meta.get("cols_zip", "N/A")},
             # {"Metric": "Key ID Column", "Value": meta.get("key_id_col", "N/A")},
             {"Metric": "Use Split", "Value": "Yes" if meta.get("use_split") else "No"},
             # {"Metric": "Join Key", "Value": meta.get("join_key", "N/A")},
@@ -420,14 +393,14 @@ if generate_clicked or "pf_profiles_base" in st.session_state:
                 st.caption(", ".join(patient_cols[:10]) + ("..." if len(patient_cols) > 10 else ""))
         
         with col_block2:
-            st.caption("**ZIP Block Columns**")
+            st.caption("**Neighborhood Block Columns**")
             zip_cols = st.session_state.get("pf_zip_block_cols", [])
             if zip_cols:
                 st.text(f"Count: {len(zip_cols)}")
                 st.caption(", ".join(zip_cols))
     
-    # --- Fused table preview ---
-    st.subheader("Fused Table — Preview")
+    # --- PSN table preview ---
+    st.subheader("PSN Feature Table — Preview")
     ft = st.session_state.get("pf_fused_table")
     if ft is not None:
         st.dataframe(ft.head(12), width='content', hide_index=True)

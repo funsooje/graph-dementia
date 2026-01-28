@@ -1,4 +1,4 @@
-# app/pages/04_Batch_ZIP_Groups.py
+# app/pages/03_Feature_Group_Comparison.py
 
 from pathlib import Path
 import json
@@ -23,8 +23,8 @@ from app._components.zip_context_utils import build_knn_graph
 # ---------------------------------------------------------------------
 # Page setup
 # ---------------------------------------------------------------------
-st.set_page_config(page_title="Batch ZIP Groups", layout="wide")
-st.title("Batch ZIP Groups Analysis")
+st.set_page_config(page_title="Feature Group Comparison", layout="wide")
+st.title("Feature Group Comparison")
 
 # ---------------------------------------------------------------------
 # Data loading and validation
@@ -70,40 +70,42 @@ if not feature_groups:
     st.stop()
 
 # ---------------------------------------------------------------------
-# User Interface Setup (Sidebar)
+# Settings (top of page)
 # ---------------------------------------------------------------------
-with st.sidebar:
-    st.header("Batch Processing Settings")
-    
-    # Multi-select for feature groups
-    selected_groups = st.multiselect(
-        "Select Feature Groups to Process",
-        options=list(feature_groups.keys()),
-        default=None,
-    )
-    
-    # k-value selection
+st.subheader("Comparison Settings")
+
+# Feature groups multi-select (full width)
+selected_groups = st.multiselect(
+    "Select Feature Groups to Compare",
+    options=list(feature_groups.keys()),
+    default=None,
+)
+
+col1, col2, col3 = st.columns(3)
+with col1:
     k = st.number_input(
-            "k (k-NN)",
-            min_value=1, max_value=20, value=int(st.session_state.get("graph_k", 3)), step=1
-        )
-    
-    # Graph type selection
-    knn_type_label = st.radio(
+        "k (k-NN)",
+        min_value=1, max_value=20,
+        value=int(st.session_state.get("graph_k", 3)),
+        step=1
+    )
+with col2:
+    knn_type_label = st.selectbox(
         "Graph Type",
-        options=["Mutual k-NN", "Directed k-NN"],
+        options=["Mutual k-NN (undirected)", "Directed k-NN"],
+        index=0,
     )
     knn_type = "mutual" if knn_type_label.startswith("Mutual") else "directed"
-    
-    # Layout type selection
+with col3:
     layout_choice = st.selectbox(
         "Graph Layout",
         options=["spring", "kamada", "circular", "random", "shell"],
         index=0,
     )
-    
-    # Run batch button
-    run_batch = st.button("Run Batch Processing", type="primary")
+
+run_batch = st.button("Run Comparison", type="primary")
+
+st.markdown("---")
 
 # Store selections in session state
 if "batch_settings" not in st.session_state:
@@ -116,11 +118,9 @@ st.session_state.batch_settings.update({
     "layout": layout_choice
 })
 
-# Main area status
+# Status message
 if not selected_groups:
-    st.warning("Please select at least one feature group to begin batch processing.")
-else:
-    st.info(f"Ready to process {len(selected_groups)} feature groups with k={k}, {knn_type} graph type, and {layout_choice} layout.")
+    st.info("Select feature groups above to compare.")
 
 # ---------------------------------------------------------------------
 # Batch Processing Logic
@@ -169,42 +169,38 @@ if run_batch and selected_groups:
                     ses_var = results[f"ses_index_var_{group_name}"].iloc[0]
 
                 # Graph summary scalars (stored per-row by the utility)
-                nodes = (
-                    results[f"nodes_{group_name}"].iloc[0]
-                    if f"nodes_{group_name}" in results.columns
-                    else None
-                )
-                edges = (
-                    results[f"edges_{group_name}"].iloc[0]
-                    if f"edges_{group_name}" in results.columns
-                    else None
-                )
-                num_comm = (
-                    results[f"num_communities_{group_name}"].iloc[0]
-                    if f"num_communities_{group_name}" in results.columns
-                    else None
-                )
-                isolated_nodes = (
-                    results[f"isolated_nodes_{group_name}"].iloc[0]
-                    if f"isolated_nodes_{group_name}" in results.columns
-                    else None
-                )
-                is_connected = (
-                    results[f"is_connected_{group_name}"].iloc[0]
-                    if f"is_connected_{group_name}" in results.columns
-                    else None
-                )
+                def get_result_col(res, grp, col_name):
+                    full_name = f"{col_name}_{grp}"
+                    return res[full_name].iloc[0] if full_name in res.columns else None
+
+                nodes = get_result_col(results, group_name, "nodes")
+                edges = get_result_col(results, group_name, "edges")
+                num_comm = get_result_col(results, group_name, "num_communities")
+                isolated_nodes = get_result_col(results, group_name, "isolated_nodes")
+                n_components = get_result_col(results, group_name, "n_components")
+                modularity = get_result_col(results, group_name, "modularity")
+
+                # Compute derived metrics
+                non_isolated_communities = None
+                if num_comm is not None and isolated_nodes is not None:
+                    non_isolated_communities = int(num_comm) - int(isolated_nodes)
+
+                non_isolated_components = None
+                if n_components is not None and isolated_nodes is not None:
+                    non_isolated_components = int(n_components) - int(isolated_nodes)
 
                 group_stats.append({
                     "group": group_name,
-                    "n_communities": n_communities,
-                    "environment_index_var": env_var,
-                    "ses_index_var": ses_var,
                     "nodes": nodes,
                     "edges": edges,
-                    "num_communities": num_comm,
+                    "n_communities": num_comm,
+                    "non_isolated_communities": non_isolated_communities,
+                    "n_components": n_components,
+                    "non_isolated_components": non_isolated_components,
                     "isolated_nodes": isolated_nodes,
-                    "is_connected": is_connected,
+                    "modularity": modularity,
+                    "env_var": env_var,
+                    "ses_var": ses_var,
                 })
                 
                 all_results.append(results)

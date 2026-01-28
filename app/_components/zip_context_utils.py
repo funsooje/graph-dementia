@@ -195,6 +195,7 @@ def create_results_dataframe(
     edges: int = None,
     num_communities: int = None,
     isolated_nodes: int = None,
+    n_components: int = None,
     is_connected: bool = None,
     group_suffix: str = ""
 ) -> pd.DataFrame:
@@ -232,6 +233,7 @@ def create_results_dataframe(
             f"edges{suffix}": (edges if edges is not None else np.nan),
             f"num_communities{suffix}": (num_communities if num_communities is not None else np.nan),
             f"isolated_nodes{suffix}": (isolated_nodes if isolated_nodes is not None else np.nan),
+            f"n_components{suffix}": (n_components if n_components is not None else np.nan),
             f"is_connected{suffix}": (is_connected if is_connected is not None else np.nan),
         }
     )
@@ -292,6 +294,11 @@ def process_zip_group(
     comm_values = set(partition.values()) if partition else set()
     num_communities = len([c for c in comm_values if c >= 0]) if partition else 0
     isolated_nodes = sum(1 for _ in nx.isolates(G))
+    # number of connected components
+    n_components = (
+        nx.number_weakly_connected_components(G) if G.is_directed()
+        else nx.number_connected_components(G)
+    )
     # connectivity: for directed graphs check weak connectivity, else connected
     is_connected = nx.is_weakly_connected(G) if G.is_directed() else nx.is_connected(G)
     
@@ -316,6 +323,7 @@ def process_zip_group(
         edges=edges,
         num_communities=num_communities,
         isolated_nodes=isolated_nodes,
+        n_components=n_components,
         is_connected=is_connected,
         group_suffix=group_name
     )

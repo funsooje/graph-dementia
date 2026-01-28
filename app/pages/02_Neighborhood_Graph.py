@@ -1,4 +1,4 @@
-# app/pages/02_ZIP_Context.py
+# app/pages/02_Neighborhood_Graph.py
 import os
 from pathlib import Path
 from io import BytesIO
@@ -31,8 +31,8 @@ from app._components.zip_context_utils import (
 # ---------------------------------------------------------------------
 # Page setup
 # ---------------------------------------------------------------------
-st.set_page_config(page_title="ZIP Context", layout="wide")
-st.title("ZIP Context Mini-Analysis")
+st.set_page_config(page_title="Neighborhood Graph", layout="wide")
+st.title("Neighborhood Graph")
 
 # ---------------------------------------------------------------------
 # Data
@@ -48,28 +48,23 @@ if zipc is None or zip_coords is None or wa_boundary is None:
 zipc = zipc.reset_index(drop=True)
 
 # ---------------------------------------------------------------------
-# Sidebar controls (form with two buttons)
+# Feature Groups: Load default from session_state or disk, merge with custom
 # ---------------------------------------------------------------------
-
-
-# --- Feature Groups: Load default from session_state or disk, merge with custom ---
 import json
 default_fg = None
 if "default_feature_groups" in st.session_state:
     default_fg = st.session_state["default_feature_groups"]
 else:
-    # fallback: try to load from disk (as in 02_FeatureGroups.py)
     default_fg_path = Path("data/feature_groups_default.json")
     if default_fg_path.exists():
         with open(default_fg_path, "r") as f:
             default_fg = json.load(f)
     else:
-        st.error("Default feature groups not found in session_state or on disk. Please run 02_FeatureGroups.py first.")
+        st.error("Default feature groups not found. Please visit the Neighborhood Features page first.")
         st.stop()
 
-# Ensure keys/values are as expected (dict of str:list-of-str)
 if not isinstance(default_fg, dict):
-    st.error("Default feature groups are not a dictionary. Please check 02_FeatureGroups.py output.")
+    st.error("Default feature groups are not a dictionary. Please check the Neighborhood Features page.")
     st.stop()
 
 DEFAULT_FEATURE_GROUPS = default_fg
@@ -78,46 +73,71 @@ if not isinstance(custom_feature_groups, dict):
     custom_feature_groups = {}
 feature_groups = {**DEFAULT_FEATURE_GROUPS, **custom_feature_groups}
 
-# Sidebar controls (feature group selection)
-with st.sidebar:
-    st.header("Settings")
-    with st.form("zip_graph_controls", clear_on_submit=False):
-        group_names = list(feature_groups.keys())
-        # Try to select previously used group if present, else default to "All features"
-        prev_group = st.session_state.get("selected_feature_group", "All features")
-        group_index = group_names.index(prev_group) if prev_group in group_names else 0
-        selected_group_name = st.selectbox(
-            "Feature group",
-            group_names,
-            index=group_index,
-        )
-        layout_choice = st.selectbox(
-            "Layout",
-            ["spring", "kamada", "circular", "random", "shell"],
-            index=["spring", "kamada", "circular", "random", "shell"].index(
-                st.session_state.get("graph_layout", "spring")
-            ),
-        )
-        k = st.number_input(
-            "k (k-NN)",
-            min_value=1, max_value=20, value=int(st.session_state.get("graph_k", 3)), step=1
-        )
-        knn_type_label = st.selectbox(
-            "k-NN graph type",
-            ["Mutual k-NN (undirected)", "Directed k-NN"],
-            index={"mutual":0, "directed":1}.get(st.session_state.get("knn_type","mutual"), 0),
-        )
-        resolution = st.number_input(
-            "Community resolution (recommended: 0.1-3.0)",
-            min_value=0.01, max_value=100.0, value=float(st.session_state.get("resolution", 1.0)), step=0.1, format="%.2f",
-            help="Higher values produce more/smaller communities, lower values produce fewer/larger communities"
-        )
-        # colb1, colb2 = st.columns(2)
-        # with colb1:
-        #     update_plots_clicked = st.form_submit_button("Load Plots")
-        # with colb2:
-        recompute_clicked = st.form_submit_button("Recompute Table and Graphs")
-        set_zip_clicked = st.form_submit_button("Set Current as ZIP features")
+# ---------------------------------------------------------------------
+# Settings (top of page)
+# ---------------------------------------------------------------------
+st.subheader("Graph Settings")
+
+group_names = list(feature_groups.keys())
+prev_group = st.session_state.get("selected_feature_group", "All features")
+group_index = group_names.index(prev_group) if prev_group in group_names else 0
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    selected_group_name = st.selectbox(
+        "Feature group",
+        group_names,
+        index=group_index,
+    )
+    k = st.number_input(
+        "k (k-NN)",
+        min_value=1, max_value=20, value=int(st.session_state.get("graph_k", 3)), step=1
+    )
+with col2:
+    layout_choice = st.selectbox(
+        "Layout",
+        ["spring", "kamada", "circular", "random", "shell"],
+        index=["spring", "kamada", "circular", "random", "shell"].index(
+            st.session_state.get("graph_layout", "spring")
+        ),
+    )
+    knn_type_label = st.selectbox(
+        "k-NN graph type",
+        ["Mutual k-NN (undirected)", "Directed k-NN"],
+        index={"mutual": 0, "directed": 1}.get(st.session_state.get("knn_type", "mutual"), 0),
+    )
+with col3:
+    resolution = st.number_input(
+        "Community resolution",
+        min_value=0.01, max_value=100.0,
+        value=float(st.session_state.get("resolution", 1.0)),
+        step=0.1, format="%.2f",
+        help="Higher values produce more/smaller communities (recommended: 0.1-3.0)"
+    )
+
+btn_col1, btn_col2, _ = st.columns([1, 1, 2])
+with btn_col1:
+    recompute_clicked = st.button("Compute Graph", type="primary")
+with btn_col2:
+    clear_cache_clicked = st.button("Clear Cache")
+
+st.markdown("---")
+
+# Handle cache clearing
+if clear_cache_clicked:
+    # Clear session state caches
+    if "zip_graph_cache" in st.session_state:
+        st.session_state["zip_graph_cache"] = {}
+    if "zip_fig_cache" in st.session_state:
+        st.session_state["zip_fig_cache"] = {"network": {}, "scatter": {}, "geo": {}}
+    # Clear disk cache
+    cache_dir = Path("data/cache/zip_figs")
+    if cache_dir.exists():
+        import shutil
+        shutil.rmtree(cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    st.success("Cache cleared.")
+    st.rerun()
 
 # Persist selections
 st.session_state["selected_feature_group"] = selected_group_name
@@ -281,62 +301,27 @@ if recompute_clicked:
         "geo_png_path": fig_to_png_file(fig_geo, geo_path)
     }
 
-    st.success("Graph recomputed and plots updated.")
+    # Save as neighborhood features
+    onehot_preview = {}
+    if "zip_community" in out.columns:
+        vals = pd.Series(out["zip_community"].unique())
+        valid = vals[vals >= 0]
+        onehot_preview["zip_community"] = int(valid.nunique())
 
+    zip_indices = st.session_state.get("zip_indices", {})
+    st.session_state["zip_features"] = out
+    st.session_state["zip_features_meta"] = {
+        "feature_group": selected_group_name,
+        "k": int(k),
+        "knn_type": st.session_state["knn_type"],
+        "resolution": st.session_state["resolution"],
+        "layout": st.session_state["graph_layout"],
+        "env_var": zip_indices.get("env_var"),
+        "ses_var": zip_indices.get("ses_var"),
+        "onehot_preview": onehot_preview,
+    }
 
-# ---------------------------------------------------------------------
-# Persist current graph outputs as canonical zip_features
-# ---------------------------------------------------------------------
-if 'set_zip_clicked' in locals() and set_zip_clicked:
-    # Save the CURRENT settings' outputs if present in cache
-    if selected_group_key in graph_cache:
-        out = graph_cache[selected_group_key]["features"].copy()
-
-        # --- One-hot expansion preview for zip_community ---
-        onehot_preview = {}
-        if "zip_community" in out.columns:
-            # count distinct valid communities; exclude unknown sentinel (-1) if present
-            vals = pd.Series(out["zip_community"].unique())
-            valid = vals[vals >= 0]
-            n_added = int(valid.nunique())
-            onehot_preview["zip_community"] = n_added
-            st.info(f"One-hot preview: zip_community would add {n_added} column(s) (excluding 'unknown').")
-        else:
-            st.info("One-hot preview: zip_community not found in current outputs.")
-
-        # Ensure required columns exist (including degree and isolated provided by process_zip_group)
-        needed = {
-            "ZIPCODE",
-            "environment_index",
-            "ses_index",
-            "zip_community",
-            "zip_betweenness",
-            "zip_pagerank",
-            "zip_degree",
-            "isolated",
-        }
-        missing = needed.difference(out.columns)
-        # Get adaptive PCA explained variance from session_state["zip_indices"]
-        zip_indices = st.session_state.get("zip_indices", {})
-        env_var = zip_indices.get("env_var", None)
-        ses_var = zip_indices.get("ses_var", None)
-        if missing:
-            st.warning(f"Cannot set zip_features: missing columns {sorted(missing)}. Recompute first.")
-        else:
-            st.session_state["zip_features"] = out
-            st.session_state["zip_features_meta"] = {
-                "feature_group": selected_group_name,
-                "k": int(k),
-                "knn_type": st.session_state["knn_type"],
-                "resolution": st.session_state["resolution"],
-                "layout": st.session_state["graph_layout"],
-                "env_var": env_var,
-                "ses_var": ses_var,
-                "onehot_preview": onehot_preview,
-            }
-            st.success("Saved current outputs as session_state['zip_features'].")
-    else:
-        st.warning("No cached graph for these settings. Click 'Recompute graph' first.")
+    st.success("Graph computed and neighborhood features updated.")
 
 # ---------------------------------------------------------------------
 # Outputs
@@ -345,15 +330,15 @@ if selected_group_key in graph_cache:
     G = graph_cache[selected_group_key]["graph"]
     out = graph_cache[selected_group_key]["features"]
 
-    # Status: which ZIP features are currently active for fusion page?
+    # Status: which neighborhood features are currently active for fusion page?
     if "zip_features" in st.session_state and "zip_features_meta" in st.session_state:
         meta = st.session_state["zip_features_meta"]
         st.info(
-            f"Active ZIP features set from: feature_group='{meta.get('feature_group', '')}', k={meta['k']}, "
+            f"Active neighborhood features: feature_group='{meta.get('feature_group', '')}', k={meta['k']}, "
             f"knn_type='{meta['knn_type']}', resolution={meta.get('resolution', 1.0):.1f}, layout='{meta['layout']}'."
         )
 
-    st.subheader("Derived ZIP features")
+    st.subheader("Derived Neighborhood Features")
     # Ensure required columns are present or computed: environment_index, ses_index, environment_index_var, ses_index_var, zip_degree, zip_betweenness, zip_pagerank, zip_community, isolated
     columns_to_include = [
         "environment_index",
@@ -452,40 +437,37 @@ if selected_group_key in graph_cache:
     except Exception as e:
         st.warning(f"Could not compute community summary table: {e}")
 
-    # PCA scatter (cached by feature set only)
-    st.subheader("PCA indices scatter (cached image)")
+    st.subheader("PCA Indices Scatter")
     scatter_png_path = None
     if scatter_key in fig_cache["scatter"]:
         scatter_png_path = fig_cache["scatter"][scatter_key]["scatter_png_path"]
     if scatter_png_path and os.path.exists(scatter_png_path):
         st.image(scatter_png_path, width='content')
     else:
-        st.info("Scatter image not cached yet. Click 'Recompute graph' or 'Update plots'.")
+        st.info("Scatter image not cached yet. Click 'Compute Graph' to generate.")
 
-    # Network graph (cached by group, k, layout)
-    st.subheader("Network graph view (cached image)")
+    st.subheader("Network Graph")
     if network_key in fig_cache["network"]:
         net_png_path = fig_cache["network"][network_key]["network_png_path"]
         if os.path.exists(net_png_path):
             st.image(net_png_path, width='content')
         else:
-            st.info("Network image missing on disk. Click 'Update plots'.")
+            st.info("Network image missing on disk. Click 'Compute Graph' to regenerate.")
     else:
-        st.info("Network image not cached yet for this layout. Click 'Update plots'.")
+        st.info("Network image not cached yet. Click 'Compute Graph' to generate.")
 
-    # Geographic map 
-    st.subheader("Geographic map of communities (cached image)")
+    st.subheader("Geographic Community Map")
     if geo_key in fig_cache["geo"]:
         geo_png_path = fig_cache["geo"][geo_key].get("geo_png_path")
         if geo_png_path and os.path.exists(geo_png_path):
             st.image(geo_png_path, width='content')
         else:
-            st.info("Geographic image missing on disk. Click 'Update plots' or 'Recompute graph'.")
+            st.info("Geographic image missing on disk. Click 'Compute Graph' to regenerate.")
     else:
-        st.info("Geographic plot not cached yet. Click 'Update plots' or 'Recompute graph'.")
+        st.info("Geographic plot not cached yet. Click 'Compute Graph' to generate.")
 
 else:
-    st.info("No cached graph for this configuration yet. Choose settings and click 'Recompute graph'.")
+    st.info("No graph computed yet. Select settings above and click 'Compute Graph'.")
 
     # Still show PCA indices preview (computed for all features at startup)
     # For preview, use all env/ses features from DEFAULT_FEATURE_GROUPS (using keys "env" and "ses")
