@@ -11,11 +11,13 @@ st.title("PSN Feature Selection")
 # ---------------------------------------------------------------------
 # Data checks
 # ---------------------------------------------------------------------
+from app._logic.loader import ensure_data_loaded
+
+if not ensure_data_loaded():
+    st.stop()
+
 pat = st.session_state.get("patients_df")
 zip_feats_initial = st.session_state.get("zip_features")  # from 02_ZIP_Context
-if pat is None:
-    st.error("patients_df not found in session_state. Load on Home.")
-    st.stop()
 if zip_feats_initial is None:
     st.warning("Neighborhood features not found. Run page 02 (Neighborhood Graph) first.")
 

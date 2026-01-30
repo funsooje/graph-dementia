@@ -3,10 +3,11 @@ import os
 import json
 import pandas as pd
 
+from app._logic.loader import ensure_data_loaded
+
 st.title("Neighborhood Features Configuration")
 
-if "zip_df" not in st.session_state:
-    st.warning("Please run the previous page to load the ZIP dataframe first.")
+if not ensure_data_loaded():
     st.stop()
 
 zip_df = st.session_state["zip_df"]

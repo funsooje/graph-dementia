@@ -341,13 +341,14 @@ def compute_psn_metrics(G: nx.Graph):
 # ---------------------------------------------------------------------
 # Data checks
 # ---------------------------------------------------------------------
+from app._logic.loader import ensure_data_loaded
+
+if not ensure_data_loaded():
+    st.stop()
+
 pat = st.session_state.get("patients_df")
 zip_feats = st.session_state.get("zip_features")
 psn_groups = st.session_state.get("psn_feature_groups", {})
-
-if pat is None:
-    st.error("patients_df not found in session_state. Load on Home.")
-    st.stop()
 
 if not psn_groups:
     st.warning("No PSN feature groups defined. Go to page 08 to create feature groups first.")

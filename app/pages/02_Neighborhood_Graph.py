@@ -37,13 +37,14 @@ st.title("Neighborhood Graph")
 # ---------------------------------------------------------------------
 # Data
 # ---------------------------------------------------------------------
+from app._logic.loader import ensure_data_loaded
+
+if not ensure_data_loaded():
+    st.stop()
+
 zipc = st.session_state.get("zip_df")
 zip_coords = st.session_state.get("zip_coords")
 wa_boundary = st.session_state.get("wa_boundary")
-
-if zipc is None or zip_coords is None or wa_boundary is None:
-    st.error("Required dataframes not found in session_state. Ensure Home.py loads them at startup.")
-    st.stop()
 
 zipc = zipc.reset_index(drop=True)
 

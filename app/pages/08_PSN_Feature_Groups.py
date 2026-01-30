@@ -39,12 +39,13 @@ if "psn_feature_groups" not in st.session_state:
 # ---------------------------------------------------------------------
 # Data checks
 # ---------------------------------------------------------------------
+from app._logic.loader import ensure_data_loaded
+
+if not ensure_data_loaded():
+    st.stop()
+
 pat = st.session_state.get("patients_df")
 zip_feats = st.session_state.get("zip_features")
-
-if pat is None:
-    st.error("patients_df not found. Load on Home.")
-    st.stop()
 
 # ---------------------------------------------------------------------
 # Available columns

@@ -18,11 +18,12 @@ st.title("K Sensitivity Analysis")
 # ---------------------------------------------------------------------
 # Data loading and validation
 # ---------------------------------------------------------------------
-zipc = st.session_state.get("zip_df")
+from app._logic.loader import ensure_data_loaded
 
-if zipc is None:
-    st.error("Required dataframes not found in session_state. Ensure Home.py loads them at startup.")
+if not ensure_data_loaded():
     st.stop()
+
+zipc = st.session_state.get("zip_df")
 
 zipc = zipc.reset_index(drop=True)
 
