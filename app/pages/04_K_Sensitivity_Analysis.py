@@ -7,6 +7,19 @@ import pandas as pd
 
 from app._components.zip_context_utils import (
     process_zip_group,
+    present,
+    get_group_columns,
+    build_knn_graph,
+)
+from sklearn.preprocessing import StandardScaler
+
+# Import shared graph cache utilities
+from app._logic.graph_cache import (
+    get_cached_graph,
+    clear_all_cache,
+    initialize_session_cache,
+    reconstruct_results_from_cache,
+    save_graph_to_cache,
 )
 
 # ---------------------------------------------------------------------
@@ -52,6 +65,9 @@ if not feature_groups:
     st.error("No feature groups available. Please configure feature groups first.")
     st.stop()
 
+# Initialize graph cache from disk
+initialize_session_cache()
+
 # ---------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------
@@ -92,7 +108,17 @@ with col4:
         help="Higher values produce more/smaller communities"
     )
 
-run_analysis = st.button("Run Analysis", type="primary")
+col_btn1, col_btn2, _ = st.columns([1, 1, 2])
+with col_btn1:
+    run_analysis = st.button("Run Analysis", type="primary")
+with col_btn2:
+    clear_cache_clicked = st.button("Clear Cache")
+
+# Handle cache clearing
+if clear_cache_clicked:
+    clear_all_cache()
+    st.success("Cache cleared.")
+    st.rerun()
 
 st.markdown("---")
 
@@ -114,6 +140,7 @@ if not selected_groups:
 # ---------------------------------------------------------------------
 
 METRICS = [
+    "nodes",
     "edges",
     "n_communities",
     "non_isolated_communities",
@@ -132,21 +159,96 @@ if run_analysis and selected_groups and k_values:
     results_dict = {}
     total_iterations = len(selected_groups) * len(k_values)
     current_iteration = 0
+    cache_hits = 0
+    cache_misses = 0
 
     for group_name in selected_groups:
         for k in k_values:
-            status_text.text(f"Processing: {group_name}, k={k}")
+            # Check cache first
+            cache_key = (group_name, int(k), knn_type, float(resolution))
+            cached_result = get_cached_graph(cache_key)
 
+            if cached_result is not None:
+                cache_hits += 1
+                status_text.text(f"Processing: {group_name}, k={k} (from cache)")
+
+                # Reconstruct from cache WITHOUT expensive recomputation
+                try:
+                    graph, features_df = cached_result
+                    results = reconstruct_results_from_cache(graph, features_df, group_name)
+                except Exception as e:
+                    st.warning(f"Cache error for {group_name}, k={k}: {e}. Recomputing...")
+                    cache_misses += 1
+                    cache_hits -= 1
+                    results = process_zip_group(
+                        zipc=zipc,
+                        group_name=group_name,
+                        feature_groups=feature_groups,
+                        k=k,
+                        knn_type=knn_type,
+                        default_groups=DEFAULT_FEATURE_GROUPS,
+                        resolution=resolution
+                    )
+            else:
+                cache_misses += 1
+                status_text.text(f"Processing: {group_name}, k={k}")
+
+                try:
+                    # Get features and compute graph to save to cache
+                    sel_cols = get_group_columns(feature_groups[group_name])
+                    selected_features = present(zipc, sel_cols)
+
+                    if selected_features:
+                        # Build graph
+                        feats = zipc[selected_features].astype(float).values
+                        feats = StandardScaler().fit_transform(feats)
+                        G = build_knn_graph(feats, k_neighbors=k, knn_type=knn_type)
+
+                        # Call process_zip_group for full results
+                        results = process_zip_group(
+                            zipc=zipc,
+                            group_name=group_name,
+                            feature_groups=feature_groups,
+                            k=k,
+                            knn_type=knn_type,
+                            default_groups=DEFAULT_FEATURE_GROUPS,
+                            resolution=resolution
+                        )
+
+                        # Save to cache for future use
+                        if results is not None:
+                            # Create normalized features DataFrame for caching
+                            out_df = pd.DataFrame({
+                                "ZIPCODE": results["ZIPCODE"].astype(str),
+                                "environment_index": results.get(f"environment_index_{group_name}"),
+                                "ses_index": results.get(f"ses_index_{group_name}"),
+                                "zip_community": results.get(f"zip_community_{group_name}"),
+                                "zip_betweenness": results.get(f"zip_betweenness_{group_name}"),
+                                "zip_pagerank": results.get(f"zip_pagerank_{group_name}"),
+                                "zip_degree": results.get(f"degree_{group_name}"),
+                                "isolated": results.get(f"isolated_{group_name}"),
+                                "environment_index_var": results.get(f"environment_index_var_{group_name}"),
+                                "ses_index_var": results.get(f"ses_index_var_{group_name}"),
+                                "modularity": results.get(f"modularity_{group_name}")
+                            })
+
+                            meta = {
+                                "feature_group": group_name,
+                                "k": k,
+                                "knn_type": knn_type,
+                                "resolution": resolution,
+                            }
+
+                            save_graph_to_cache(cache_key, G, out_df, meta)
+                    else:
+                        results = None
+
+                except Exception as e:
+                    st.error(f"Error processing {group_name}, k={k}: {str(e)}")
+                    results = None
+
+            # Extract metrics if results exist
             try:
-                results = process_zip_group(
-                    zipc=zipc,
-                    group_name=group_name,
-                    feature_groups=feature_groups,
-                    k=k,
-                    knn_type=knn_type,
-                    default_groups=DEFAULT_FEATURE_GROUPS,
-                    resolution=resolution
-                )
 
                 if results is not None:
                     # Extract metrics helper
@@ -154,6 +256,7 @@ if run_analysis and selected_groups and k_values:
                         full_name = f"{col_name}_{grp}"
                         return res[full_name].iloc[0] if full_name in res.columns else None
 
+                    nodes = get_result_col(results, group_name, "nodes")
                     edges = get_result_col(results, group_name, "edges")
                     num_communities = get_result_col(results, group_name, "num_communities")
                     isolated_nodes = get_result_col(results, group_name, "isolated_nodes")
@@ -170,6 +273,7 @@ if run_analysis and selected_groups and k_values:
                         non_isolated_components = int(n_components) - int(isolated_nodes)
 
                     results_dict[(group_name, k)] = {
+                        "nodes": nodes,
                         "edges": edges,
                         "n_communities": num_communities,
                         "non_isolated_communities": non_isolated_communities,
@@ -190,6 +294,13 @@ if run_analysis and selected_groups and k_values:
 
     progress_bar.empty()
     status_text.empty()
+
+    # Show cache statistics
+    total_runs = len(selected_groups) * len(k_values)
+    cache_msg = f"Analysis complete: {len(selected_groups)} groups x {len(k_values)} k values"
+    if cache_hits > 0:
+        cache_msg += f" ({cache_hits} from cache, {cache_misses} computed)"
+    st.success(cache_msg)
 
     # Build cross-tab DataFrame
     rows = []
@@ -222,8 +333,6 @@ if run_analysis and selected_groups and k_values:
         "knn_type": knn_type,
         "resolution": resolution,
     }
-
-    st.success(f"Analysis complete: {len(selected_groups)} groups x {len(k_values)} k values")
 
 # ---------------------------------------------------------------------
 # Display results

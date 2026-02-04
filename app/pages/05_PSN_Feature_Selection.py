@@ -392,7 +392,8 @@ if generate_clicked or "pf_profiles_base" in st.session_state:
             patient_cols = st.session_state.get("pf_patient_block_cols", [])
             if patient_cols:
                 st.text(f"Count: {len(patient_cols)}")
-                st.caption(", ".join(patient_cols[:10]) + ("..." if len(patient_cols) > 10 else ""))
+                st.caption(", ".join(patient_cols))
+                # st.caption(", ".join(patient_cols[:10]) + ("..." if len(patient_cols) > 10 else ""))
         
         with col_block2:
             st.caption("**Neighborhood Block Columns**")

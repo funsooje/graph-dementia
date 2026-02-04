@@ -75,6 +75,23 @@ if not isinstance(custom_feature_groups, dict):
 feature_groups = {**DEFAULT_FEATURE_GROUPS, **custom_feature_groups}
 
 # ---------------------------------------------------------------------
+# Cache setup
+# ---------------------------------------------------------------------
+CACHE_DIR = Path("data/cache/zip_figs")
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Import shared graph cache utilities
+from app._logic.graph_cache import (
+    save_graph_to_cache,
+    get_cached_graph,
+    clear_all_cache,
+    initialize_session_cache,
+)
+
+# Initialize graph cache from disk
+initialize_session_cache()
+
+# ---------------------------------------------------------------------
 # Settings (top of page)
 # ---------------------------------------------------------------------
 st.subheader("Graph Settings")
@@ -127,16 +144,15 @@ st.markdown("---")
 # Handle cache clearing
 if clear_cache_clicked:
     # Clear session state caches
-    if "zip_graph_cache" in st.session_state:
-        st.session_state["zip_graph_cache"] = {}
     if "zip_fig_cache" in st.session_state:
         st.session_state["zip_fig_cache"] = {"network": {}, "scatter": {}, "geo": {}}
-    # Clear disk cache
-    cache_dir = Path("data/cache/zip_figs")
-    if cache_dir.exists():
-        import shutil
-        shutil.rmtree(cache_dir)
-        cache_dir.mkdir(parents=True, exist_ok=True)
+    # Clear all graph caches (session state + disk)
+    clear_all_cache()
+    # Clear figure cache on disk
+    import shutil
+    if CACHE_DIR.exists():
+        shutil.rmtree(CACHE_DIR)
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
     st.success("Cache cleared.")
     st.rerun()
 
@@ -150,9 +166,6 @@ st.session_state["resolution"] = float(resolution)
 # ---------------------------------------------------------------------
 # Disk figure cache helpers
 # ---------------------------------------------------------------------
-CACHE_DIR = Path("data/cache/zip_figs")
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
 def fig_to_png_file(fig, path: Path, dpi: int = 110) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, format="png", bbox_inches="tight", dpi=dpi)
@@ -207,50 +220,61 @@ if recompute_clicked:
     req_cols = get_group_columns(feature_groups[selected_group_name])
     missing_cols = [c for c in req_cols if c not in zipc.columns]
     if missing_cols:
-        st.error(f"Cannot compute graph: the following columns from the selected feature group are missing in the data: {missing_cols}")
+        st.error(
+            f"Cannot compute graph: missing columns {missing_cols}"
+        )
         st.stop()
 
-    # Process this group using utility functions
-    results = process_zip_group(
-        zipc=zipc,
-        group_name=selected_group_name,
-        feature_groups=feature_groups,
-        k=int(k),
-        knn_type=knn_type,
-        default_groups=DEFAULT_FEATURE_GROUPS,
-        resolution=resolution_val
-    )
-    
-    if results is None:
-        st.error("Failed to process group - no valid features found.")
-        st.stop()
-    
-    # Extract graph and metrics
-    feats = zipc[selected_features].astype(float).values
-    feats = StandardScaler().fit_transform(feats)
-    G = build_knn_graph(feats, k_neighbors=int(k), knn_type=knn_type)
-    
-    # Create output DataFrame without group suffix
-    env_var_key = f"environment_index_var_{selected_group_name}"
-    ses_var_key = f"ses_index_var_{selected_group_name}"
+    # Check cache first
+    cache_key = (selected_group_name, int(k), knn_type, resolution_val)
+    cached_result = get_cached_graph(cache_key)
 
-    out = pd.DataFrame({
-        "ZIPCODE": results["ZIPCODE"],
-        "environment_index": results[f"environment_index_{selected_group_name}"],
-        "ses_index": results[f"ses_index_{selected_group_name}"],
-        "zip_community": results[f"zip_community_{selected_group_name}"],
-        "zip_betweenness": results[f"zip_betweenness_{selected_group_name}"],
-        "zip_pagerank": results[f"zip_pagerank_{selected_group_name}"],
-        # degree and isolated are produced by process_zip_group and include group suffix
-        "zip_degree": results.get(f"degree_{selected_group_name}"),
-        "isolated": results.get(f"isolated_{selected_group_name}"),
-        "environment_index_var": results[env_var_key] if env_var_key in results.columns else None,
-        "ses_index_var": results[ses_var_key] if ses_var_key in results.columns else None,
-        # Add modularity from results
-        "modularity": results.get(f"modularity_{selected_group_name}")
-    })
+    if cached_result is not None:
+        # Load from cache - much faster!
+        G, out = cached_result
+        st.info("Loaded from cache!")
+    else:
+        # Compute graph - cache miss
+        with st.spinner("Computing graph..."):
+            # Process this group using utility functions
+            results = process_zip_group(
+                zipc=zipc,
+                group_name=selected_group_name,
+                feature_groups=feature_groups,
+                k=int(k),
+                knn_type=knn_type,
+                default_groups=DEFAULT_FEATURE_GROUPS,
+                resolution=resolution_val
+            )
 
-    # Get indices for session state
+            if results is None:
+                st.error("Failed to process group - no valid features found.")
+                st.stop()
+
+            # Extract graph and metrics
+            feats = zipc[selected_features].astype(float).values
+            feats = StandardScaler().fit_transform(feats)
+            G = build_knn_graph(feats, k_neighbors=int(k), knn_type=knn_type)
+
+            # Create output DataFrame without group suffix
+            env_var_key = f"environment_index_var_{selected_group_name}"
+            ses_var_key = f"ses_index_var_{selected_group_name}"
+
+            out = pd.DataFrame({
+                "ZIPCODE": results["ZIPCODE"],
+                "environment_index": results[f"environment_index_{selected_group_name}"],
+                "ses_index": results[f"ses_index_{selected_group_name}"],
+                "zip_community": results[f"zip_community_{selected_group_name}"],
+                "zip_betweenness": results[f"zip_betweenness_{selected_group_name}"],
+                "zip_pagerank": results[f"zip_pagerank_{selected_group_name}"],
+                "zip_degree": results.get(f"degree_{selected_group_name}"),
+                "isolated": results.get(f"isolated_{selected_group_name}"),
+                "environment_index_var": results[env_var_key] if env_var_key in results.columns else None,
+                "ses_index_var": results[ses_var_key] if ses_var_key in results.columns else None,
+                "modularity": results.get(f"modularity_{selected_group_name}")
+            })
+
+    # Get indices for session state (both from cache and new computation)
     st.session_state["zip_indices"] = {
         "environment_index": out["environment_index"].to_numpy(),
         "ses_index": out["ses_index"].to_numpy(),
@@ -260,7 +284,7 @@ if recompute_clicked:
         "ses_cols": [c for c in selected_features if c in get_cols_from_default("ses")]
     }
 
-    # Save graph data
+    # Save graph data to session cache
     graph_cache[selected_group_key] = {"graph": G, "features": out}
 
     # Render and cache Network plot (by group,k,resolution,layout)
@@ -322,7 +346,20 @@ if recompute_clicked:
         "onehot_preview": onehot_preview,
     }
 
-    st.success("Graph computed and neighborhood features updated.")
+    # Save to disk cache (only if newly computed, not from cache)
+    if cached_result is None:
+        save_graph_to_cache(
+            cache_key,
+            G,
+            out,
+            st.session_state["zip_features_meta"],
+            st.session_state["zip_indices"],
+        )
+
+    if cached_result is not None:
+        st.success("Graph loaded from cache and neighborhood features updated.")
+    else:
+        st.success("Graph computed and neighborhood features updated.")
 
 # ---------------------------------------------------------------------
 # Outputs

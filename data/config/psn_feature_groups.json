@@ -1,90 +1,4 @@
 {
-  "Patients Only": {
-    "name": "Patients Only",
-    "selected_cols": [
-      "SEX",
-      "Race",
-      "AGE_BIN",
-      "LENSTAYD_BIN",
-      "Hearingloss",
-      "BrainInjury",
-      "Hypertension",
-      "Alcohol",
-      "Obesity",
-      "Diabetes"
-    ],
-    "profile_cols": {
-      "demographics": [
-        "SEX",
-        "Race",
-        "AGE_BIN"
-      ],
-      "utilization": [
-        "LENSTAYD_BIN"
-      ],
-      "risk_binaries": [
-        "Hearingloss",
-        "BrainInjury",
-        "Hypertension",
-        "Alcohol",
-        "Obesity",
-        "Diabetes"
-      ]
-    },
-    "neighborhood_features": {
-      "environment_index": false,
-      "ses_index": false,
-      "zip_degree": false,
-      "zip_pagerank": false,
-      "zip_betweenness": false,
-      "onehot_zip_community": false
-    },
-    "split_by_zip": false,
-    "weight_balance": 0.0
-  },
-  "Patients + Degree": {
-    "name": "Patients + Degree",
-    "selected_cols": [
-      "SEX",
-      "Race",
-      "AGE_BIN",
-      "LENSTAYD_BIN",
-      "Hearingloss",
-      "BrainInjury",
-      "Hypertension",
-      "Alcohol",
-      "Obesity",
-      "Diabetes"
-    ],
-    "profile_cols": {
-      "demographics": [
-        "SEX",
-        "Race",
-        "AGE_BIN"
-      ],
-      "utilization": [
-        "LENSTAYD_BIN"
-      ],
-      "risk_binaries": [
-        "Hearingloss",
-        "BrainInjury",
-        "Hypertension",
-        "Alcohol",
-        "Obesity",
-        "Diabetes"
-      ]
-    },
-    "neighborhood_features": {
-      "environment_index": false,
-      "ses_index": false,
-      "zip_degree": true,
-      "zip_pagerank": false,
-      "zip_betweenness": false,
-      "onehot_zip_community": false
-    },
-    "split_by_zip": false,
-    "weight_balance": 0.25
-  },
   "Patients + PageRank": {
     "name": "Patients + PageRank",
     "selected_cols": [
@@ -299,5 +213,91 @@
     },
     "split_by_zip": true,
     "weight_balance": 0.25
+  },
+  "Patient Only": {
+    "name": "Patient Only",
+    "selected_cols": [
+      "SEX",
+      "Race",
+      "AGE_BIN",
+      "PAYER",
+      "Hearingloss",
+      "BrainInjury",
+      "Hypertension",
+      "Alcohol",
+      "Obesity",
+      "Diabetes"
+    ],
+    "profile_cols": {
+      "demographics": [
+        "SEX",
+        "Race",
+        "AGE_BIN"
+      ],
+      "utilization": [
+        "PAYER"
+      ],
+      "risk_binaries": [
+        "Hearingloss",
+        "BrainInjury",
+        "Hypertension",
+        "Alcohol",
+        "Obesity",
+        "Diabetes"
+      ]
+    },
+    "neighborhood_features": {
+      "environment_index": false,
+      "ses_index": false,
+      "zip_degree": false,
+      "zip_pagerank": false,
+      "zip_betweenness": false,
+      "onehot_zip_community": false
+    },
+    "split_by_zip": false,
+    "weight_balance": 0.0
+  },
+  "Patient  + Degree": {
+    "name": "Patient  + Degree",
+    "selected_cols": [
+      "SEX",
+      "Race",
+      "AGE_BIN",
+      "PAYER",
+      "Hearingloss",
+      "BrainInjury",
+      "Hypertension",
+      "Alcohol",
+      "Obesity",
+      "Diabetes"
+    ],
+    "profile_cols": {
+      "demographics": [
+        "SEX",
+        "Race",
+        "AGE_BIN"
+      ],
+      "utilization": [
+        "PAYER"
+      ],
+      "risk_binaries": [
+        "Hearingloss",
+        "BrainInjury",
+        "Hypertension",
+        "Alcohol",
+        "Obesity",
+        "Diabetes"
+      ]
+    },
+    "neighborhood_features": {
+      "environment_index": false,
+      "ses_index": false,
+      "zip_degree": true,
+      "zip_pagerank": false,
+      "zip_betweenness": false,
+      "onehot_zip_community": false
+    },
+    "split_by_zip": false,
+    "weight_balance": 0.3
   }
 }

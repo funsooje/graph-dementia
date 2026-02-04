@@ -20,6 +20,15 @@ from app._components.plots import (
 from sklearn.preprocessing import StandardScaler
 from app._components.zip_context_utils import build_knn_graph
 
+# Import shared graph cache utilities
+from app._logic.graph_cache import (
+    save_graph_to_cache,
+    get_cached_graph,
+    clear_all_cache,
+    initialize_session_cache,
+    reconstruct_results_from_cache,
+)
+
 # ---------------------------------------------------------------------
 # Page setup
 # ---------------------------------------------------------------------
@@ -69,6 +78,9 @@ if not feature_groups:
     st.error("No feature groups available. Please configure feature groups first.")
     st.stop()
 
+# Initialize graph cache from disk
+initialize_session_cache()
+
 # ---------------------------------------------------------------------
 # Settings (top of page)
 # ---------------------------------------------------------------------
@@ -81,7 +93,7 @@ selected_groups = st.multiselect(
     default=None,
 )
 
-col1, col2, col3 = st.columns(3)
+col1, col2 = st.columns(2)
 with col1:
     k = st.number_input(
         "k (k-NN)",
@@ -89,21 +101,37 @@ with col1:
         value=int(st.session_state.get("graph_k", 3)),
         step=1
     )
-with col2:
     knn_type_label = st.selectbox(
         "Graph Type",
         options=["Mutual k-NN (undirected)", "Directed k-NN"],
         index=0,
     )
     knn_type = "mutual" if knn_type_label.startswith("Mutual") else "directed"
-with col3:
+with col2:
+    resolution = st.number_input(
+        "Community resolution",
+        min_value=0.01, max_value=100.0,
+        value=float(st.session_state.get("resolution", 1.0)),
+        step=0.1, format="%.2f",
+        help="Higher values produce more/smaller communities"
+    )
     layout_choice = st.selectbox(
         "Graph Layout",
         options=["spring", "kamada", "circular", "random", "shell"],
         index=0,
     )
 
-run_batch = st.button("Run Comparison", type="primary")
+col_btn1, col_btn2, _ = st.columns([1, 1, 2])
+with col_btn1:
+    run_batch = st.button("Run Comparison", type="primary")
+with col_btn2:
+    clear_cache_clicked = st.button("Clear Cache")
+
+# Handle cache clearing
+if clear_cache_clicked:
+    clear_all_cache()
+    st.success("Cache cleared.")
+    st.rerun()
 
 st.markdown("---")
 
@@ -115,7 +143,8 @@ st.session_state.batch_settings.update({
     "selected_groups": selected_groups,
     "k": k,
     "knn_type": knn_type,
-    "layout": layout_choice
+    "layout": layout_choice,
+    "resolution": resolution
 })
 
 # Status message
@@ -141,21 +170,78 @@ if run_batch and selected_groups:
     # Process each group
     all_results = []
     group_stats = []
-    
+    cache_hits = 0
+    cache_misses = 0
+
     for idx, group_name in enumerate(selected_groups):
         status_text.text(f"Processing group: {group_name}")
-        
+
         try:
-            # Process using utility function
-            results = process_zip_group(
-                zipc=zipc,
-                group_name=group_name,
-                feature_groups=feature_groups,
-                k=k,
-                knn_type=knn_type,
-                default_groups=DEFAULT_FEATURE_GROUPS
-            )
-            
+            # Check cache first
+            cache_key = (group_name, int(k), knn_type, float(resolution))
+            cached_result = get_cached_graph(cache_key)
+
+            if cached_result is not None:
+                # Load from cache - MUCH faster!
+                cache_hits += 1
+                status_text.text(f"Processing group: {group_name} (from cache)")
+
+                # Reconstruct results from cached data WITHOUT expensive recomputation
+                graph, features_df = cached_result
+                results = reconstruct_results_from_cache(graph, features_df, group_name)
+            else:
+                # Compute from scratch
+                cache_misses += 1
+
+                # Get features and compute graph to save to cache
+                sel_cols = get_group_columns(feature_groups[group_name])
+                selected_features = present(zipc, sel_cols)
+
+                if selected_features:
+                    # Build graph
+                    feats = zipc[selected_features].astype(float).values
+                    feats = StandardScaler().fit_transform(feats)
+                    G = build_knn_graph(feats, k_neighbors=k, knn_type=knn_type)
+
+                    # Call process_zip_group for full results
+                    results = process_zip_group(
+                        zipc=zipc,
+                        group_name=group_name,
+                        feature_groups=feature_groups,
+                        k=k,
+                        knn_type=knn_type,
+                        default_groups=DEFAULT_FEATURE_GROUPS,
+                        resolution=resolution
+                    )
+
+                    # Save to cache for future use
+                    if results is not None:
+                        # Create normalized features DataFrame for caching
+                        out_df = pd.DataFrame({
+                            "ZIPCODE": results["ZIPCODE"].astype(str),
+                            "environment_index": results.get(f"environment_index_{group_name}"),
+                            "ses_index": results.get(f"ses_index_{group_name}"),
+                            "zip_community": results.get(f"zip_community_{group_name}"),
+                            "zip_betweenness": results.get(f"zip_betweenness_{group_name}"),
+                            "zip_pagerank": results.get(f"zip_pagerank_{group_name}"),
+                            "zip_degree": results.get(f"degree_{group_name}"),
+                            "isolated": results.get(f"isolated_{group_name}"),
+                            "environment_index_var": results.get(f"environment_index_var_{group_name}"),
+                            "ses_index_var": results.get(f"ses_index_var_{group_name}"),
+                            "modularity": results.get(f"modularity_{group_name}")
+                        })
+
+                        meta = {
+                            "feature_group": group_name,
+                            "k": k,
+                            "knn_type": knn_type,
+                            "resolution": resolution,
+                        }
+
+                        save_graph_to_cache(cache_key, G, out_df, meta)
+                else:
+                    results = None
+
             if results is not None:
                 # Get some basic stats for this group
                 # community count (exclude unknown -1)
@@ -225,13 +311,19 @@ if run_batch and selected_groups:
             "k": k,
             "knn_type": knn_type,
             "layout": layout_choice,
+            "resolution": resolution,
             "groups": selected_groups
         }
-        
+
         # Clear progress indicators
         progress_bar.empty()
         status_text.empty()
-        st.success(f"Successfully processed {len(all_results)} feature groups!")
+
+        # Show cache statistics
+        cache_msg = f"Successfully processed {len(all_results)} feature groups!"
+        if cache_hits > 0:
+            cache_msg += f" ({cache_hits} from cache, {cache_misses} computed)"
+        st.success(cache_msg)
         
         # Display group statistics
         st.subheader("Group Processing Summary")
