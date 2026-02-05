@@ -2,40 +2,25 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-from sklearn.metrics.pairwise import cosine_similarity
-import networkx as nx
-import community as community_louvain
-
-
 import matplotlib.pyplot as plt
 from pathlib import Path
-
-# --- DEBUG: logging setup ---
-import os, time, logging, sys
+import networkx as nx
+import community as community_louvain
 
 from app._components.plots import (
     plot_networkx_graph,          # returns a Matplotlib fig
     plot_profile_scatter_embed,   # returns a Matplotlib fig (PCA 2D)
 )
 
-from pynndescent import NNDescent
-HAS_PYNNDESCENT = True
-
-def _make_logger():
-    logger = logging.getLogger("psn_graphs")
-    if not logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
-        fmt = logging.Formatter("[%(asctime)s] %(levelname)s %(message)s", datefmt="%H:%M:%S")
-        handler.setFormatter(fmt)
-        logger.addHandler(handler)
-    level_name = os.getenv("GD_LOG_LEVEL", "INFO").upper()
-    logger.setLevel(getattr(logging, level_name, logging.INFO))
-    return logger
-
-LOGGER = _make_logger()
-
-def _elapsed(t0: float) -> str:
-    return f"{time.perf_counter() - t0:.2f}s"
+# Import PSN graph building utilities
+from app._logic.psn_graph_builder import (
+    build_weighted_matrix,
+    topk_ann_or_exact,
+    topk_mixed_similarity,
+    build_knn_graph_from_neighbors,
+    compute_graph_metrics,
+    HAS_PYNNDESCENT,
+)
 
 
 
@@ -115,12 +100,18 @@ if missing:
 # Quick preflight summary (no heavy work)
 st.subheader("Inputs Summary")
 n_rows, n_cols = (X_fused.shape if isinstance(X_fused, np.ndarray) else (None, None))
+
+# Get encoding mode from session state
+encoding_meta = st.session_state.get("pf_encoding_metadata", {})
+encoding_mode = encoding_meta.get("mode", "unknown")
+
 inputs_df = pd.DataFrame([
     {"Metric": "PSN Matrix Shape", "Value": f"{n_rows} × {n_cols}"},
     {"Metric": "PSN Table Rows", "Value": len(tbl_fused)},
     {"Metric": "Profile Block Cols", "Value": len(pat_cols)},
     {"Metric": "Neighborhood Block Cols", "Value": len(zip_cols)},
     {"Metric": "Index Length", "Value": len(idx_fused)},
+    {"Metric": "Encoding Mode", "Value": encoding_mode.capitalize()},
 ])
 st.dataframe(inputs_df, use_container_width=True, hide_index=True)
 
@@ -153,6 +144,8 @@ if "patient_btw_k" not in st.session_state:
     st.session_state["patient_btw_k"] = 400
 if "scatter_color_by" not in st.session_state:
     st.session_state["scatter_color_by"] = "profile_community"
+if "patient_similarity_metric" not in st.session_state:
+    st.session_state["patient_similarity_metric"] = "cosine"
 
 # ---------------------------------------------------------------------
 # Main page controls
@@ -219,6 +212,33 @@ with st.expander("Similarity Settings", expanded=False):
             value=int(st.session_state["patient_sim_threshold"]),
             help="Switch to ANN when n > threshold",
             disabled=(ann_mode_label != "Auto (threshold)")
+        )
+
+    # Similarity metric selector (shown only for experimental encoding)
+    encoding_meta = st.session_state.get("pf_encoding_metadata", {})
+    encoding_mode = encoding_meta.get("mode", "standard")
+
+    if encoding_mode == "experimental":
+        st.markdown("**Similarity Metric**")
+        st.caption("Experimental encoding detected. Choose similarity metric:")
+
+        metric_options = [
+            "Cosine Similarity (default)",
+            "Mixed Similarity (recommended for experimental)"
+        ]
+        metric_default = st.session_state.get("patient_similarity_metric", "cosine")
+        metric_idx = 0 if metric_default == "cosine" else 1
+
+        metric_choice = st.radio(
+            "Metric",
+            metric_options,
+            index=metric_idx,
+            help=(
+                "Cosine: Standard cosine similarity (faster, works on any encoding).\n\n"
+                "Mixed: Custom metric combining exact-match for categoricals + "
+                "Hamming distance for bitflags + cosine for numeric (slower, more accurate for experimental encoding)."
+            ),
+            label_visibility="collapsed"
         )
 
 # --- Betweenness Settings (collapsible) ---
@@ -320,6 +340,12 @@ st.session_state["patient_btw_mode"] = (
 st.session_state["patient_btw_threshold"] = int(btw_thresh)
 st.session_state["patient_btw_k"] = int(btw_sample_k)
 
+# Similarity metric (only set if experimental encoding)
+if encoding_mode == "experimental":
+    st.session_state["patient_similarity_metric"] = (
+        "cosine" if metric_choice.startswith("Cosine") else "mixed"
+    )
+
 # Build figure cache keys after persisting
 network_key = (
     int(st.session_state["patient_graph_k"]),
@@ -336,190 +362,9 @@ scatter_key = (
 )
 
 # ---------------------------------------------------------------------
-# Phase 2 — Build weighted feature view
+# Phase 2 + 3 — Weighted feature view + similarity + k-NN graph + metrics
+# (Functions now imported from app._logic.psn_graph_builder)
 # ---------------------------------------------------------------------
-def build_weighted_matrix(X_fused, patient_cols, zip_cols, patient_w: float, zip_w: float):
-    """
-    Reweights the fused matrix by block:
-      - patient block columns * patient_w
-      - zip block columns * zip_w
-    Assumes X_fused columns are [patient_cols..., zip_cols...] in that order (as in page 03).
-    Returns a numpy array X_weighted with same shape.
-    """
-    n_pat = len(patient_cols) if patient_cols is not None else 0
-    n_zip = len(zip_cols) if zip_cols is not None else 0
-
-    Xw = X_fused.astype(float).copy()
-    if n_pat > 0:
-        Xw[:, :n_pat] *= float(patient_w)
-    if n_zip > 0:
-        Xw[:, n_pat:n_pat + n_zip] *= float(zip_w)
-    return Xw
-
-# ---------------------------------------------------------------------
-# Phase 3 — Similarity (ANN or exact) + k-NN graph
-# ---------------------------------------------------------------------
-def topk_exact_from_matrix(X: np.ndarray, k: int):
-    """
-    Exact cosine similarity top-k neighbors for each row.
-    Returns (indices, sims, sim_matrix) with shape (n, k) and (n, n).
-    """
-    t0 = time.perf_counter()
-    n, d = X.shape
-    LOGGER.info(f"[SIM] Exact cosine path: n={n}, d={d}, k={k}")
-    sim = cosine_similarity(X)
-    LOGGER.info(f"[SIM] cosine_similarity done in {_elapsed(t0)}; sim.shape={sim.shape}")
-
-    np.fill_diagonal(sim, -np.inf)
-    idxs = np.empty((n, k), dtype=int)
-    sims = np.empty((n, k), dtype=float)
-
-    t1 = time.perf_counter()
-    for i in range(n):
-        idx = np.argpartition(sim[i], -k)[-k:]
-        idx = idx[np.argsort(sim[i, idx])[::-1]]
-        idxs[i] = idx
-        sims[i] = sim[i, idx]
-    LOGGER.info(f"[SIM] top-k selection done in {_elapsed(t1)} (total {_elapsed(t0)})")
-    return idxs, sims, sim
-
-def topk_ann_or_exact(X: np.ndarray, k: int, ann_mode: str, sim_threshold: int):
-    """
-    Use ANN (PyNNDescent) or exact cosine similarity.
-
-    Args:
-        ann_mode: "auto" (use threshold), "force_ann", or "force_exact"
-        sim_threshold: threshold for auto mode (use ANN when n > threshold)
-
-    Returns (indices, sims, sim_matrix_or_None).
-    """
-    n, d = X.shape
-    LOGGER.info(f"[SIM] Backend: n={n}, d={d}, k={k}, mode={ann_mode}, threshold={sim_threshold}")
-
-    # Decide whether to use ANN
-    use_ann = False
-    if ann_mode == "force_ann" and HAS_PYNNDESCENT:
-        use_ann = True
-    elif ann_mode == "force_exact":
-        use_ann = False
-    elif ann_mode == "auto" and n > sim_threshold and HAS_PYNNDESCENT:
-        use_ann = True
-
-    if use_ann:
-        t0 = time.perf_counter()
-        LOGGER.info("[SIM] Using ANN (PyNNDescent, metric='cosine')")
-        index = NNDescent(X, metric="cosine", n_neighbors=k+1, random_state=42)
-        LOGGER.info(f"[SIM] NNDescent build in {_elapsed(t0)}")
-
-        t1 = time.perf_counter()
-        nbrs_idx, nbrs_dist = index.query(X, k=k+1)
-        LOGGER.info(f"[SIM] NNDescent query in {_elapsed(t1)} (total {_elapsed(t0)})")
-
-        # Convert cosine distance to similarity = 1 - dist; drop self if present
-        idxs = np.zeros((n, k), dtype=int)
-        sims = np.zeros((n, k), dtype=float)
-        for i in range(n):
-            row_idx = nbrs_idx[i].tolist()
-            row_dst = nbrs_dist[i].tolist()
-            cleaned = [(j, d_) for j, d_ in zip(row_idx, row_dst) if j != i]
-            cleaned = cleaned[:k] if len(cleaned) >= k else cleaned
-            while len(cleaned) < k:
-                cleaned.append((i, 1.0))  # worst similarity if padding
-            idxs[i] = [j for j, _ in cleaned]
-            sims[i] = [1.0 - d_ for _, d_ in cleaned]
-        return idxs, sims, None
-
-    LOGGER.info("[SIM] Using EXACT cosine path (n ≤ threshold or ANN unavailable)")
-    return topk_exact_from_matrix(X, k)
-
-def build_knn_graph_from_neighbors(topk_idx: np.ndarray, topk_sim: np.ndarray, knn_type: str):
-    """
-    Build k-NN graph from neighbor lists.
-    - 'directed': i -> topk(i) with weight = sim
-    - 'mutual': undirected edges only if i in topk(j) and j in topk(i)
-    """
-    t0 = time.perf_counter()
-    n, k = topk_idx.shape
-    LOGGER.info(f"[GRAPH] Build from neighbors: n={n}, k={k}, type={knn_type}")
-
-    if knn_type == "directed":
-        G = nx.DiGraph()
-        G.add_nodes_from(range(n))
-        for i in range(n):
-            for r in range(k):
-                j = int(topk_idx[i, r])
-                w = float(topk_sim[i, r])
-                if np.isfinite(w):
-                    G.add_edge(i, j, weight=w)
-        LOGGER.info(f"[GRAPH] Directed graph edges={G.number_of_edges()} in {_elapsed(t0)}")
-        return G
-
-    neighbor_sets = [set(topk_idx[i]) for i in range(n)]
-    G = nx.Graph()
-    G.add_nodes_from(range(n))
-    for i in range(n):
-        for j in neighbor_sets[i]:
-            if i < j and i in neighbor_sets[j]:
-                wi = float(topk_sim[i, np.where(topk_idx[i] == j)[0][0]])
-                wj = float(topk_sim[j, np.where(topk_idx[j] == i)[0][0]])
-                w = (wi + wj) / 2.0
-                if np.isfinite(w):
-                    G.add_edge(i, int(j), weight=w)
-    LOGGER.info(f"[GRAPH] Mutual graph edges={G.number_of_edges()} in {_elapsed(t0)}")
-    return G
-
-def compute_graph_metrics(G: nx.Graph, btw_mode: str = "auto", btw_k: int = 400, btw_threshold: int = 5000):
-    """
-    - Communities: Louvain on undirected view
-    - Betweenness: 'skip' | 'approx' (sampling with nx.betweenness_centrality k=...) | 'exact' | 'auto' (approx if large)
-    - PageRank: directed if DiGraph, undirected otherwise
-
-    Args:
-        btw_threshold: threshold for auto mode (use approximate when n >= threshold)
-    """
-    n = G.number_of_nodes()
-    m = G.number_of_edges()
-
-    # Community on undirected projection
-    t0 = time.perf_counter()
-    G_u = G.to_undirected() if G.is_directed() else G
-    LOGGER.info(f"[METRICS] Louvain on {'undirected projection' if G.is_directed() else 'undirected graph'}; nodes={G_u.number_of_nodes()}, edges={G_u.number_of_edges()}")
-    partition = community_louvain.best_partition(G_u, weight="weight", random_state=42)
-    LOGGER.info(f"[METRICS] Louvain done in {_elapsed(t0)}")
-
-    # ---- Betweenness ----
-    # decide mode
-    mode = btw_mode
-    if btw_mode == "auto":
-        mode = "approx" if n >= btw_threshold else "exact"
-
-    if mode == "skip":
-        LOGGER.info("[METRICS] Betweenness skipped")
-        btw = {i: 0.0 for i in G.nodes()}
-    elif mode == "approx":
-        LOGGER.info(f"[METRICS] Approx betweenness via sampling (k={int(btw_k)}) starting...")
-        t1 = time.perf_counter()
-        try:
-            # NetworkX supports sampling by passing k (number of sources) to betweenness_centrality.
-            btw = nx.betweenness_centrality(G_u, k=int(btw_k), normalized=True, weight="weight", seed=42)
-        except TypeError:
-            # Fallback for older NetworkX without 'seed' argument
-            btw = nx.betweenness_centrality(G_u, k=int(btw_k), normalized=True, weight="weight")
-        LOGGER.info(f"[METRICS] Approx betweenness done in {_elapsed(t1)}")
-    else:  # exact
-        LOGGER.info("[METRICS] Exact betweenness starting (may be slow)...")
-        t1 = time.perf_counter()
-        btw = nx.betweenness_centrality(G, weight="weight", normalized=True)
-        LOGGER.info(f"[METRICS] Exact betweenness done in {_elapsed(t1)}")
-
-    # ---- PageRank ----
-    t2 = time.perf_counter()
-    pr = nx.pagerank(G, alpha=0.85, weight="weight")
-    LOGGER.info(f"[METRICS] PageRank in {_elapsed(t2)}")
-
-    deg = dict(G.degree(weight=None))
-    LOGGER.info(f"[METRICS] Degree computed; total nodes={len(deg)}")
-    return partition, btw, pr, deg
 
 # ---------------------------------------------------------------------
 # Cache container for graphs and features
@@ -539,7 +384,6 @@ graph_cache_key = (
 # Generate graph (Phase 2 + 3), render figures, and set as active
 # ---------------------------------------------------------------------
 if generate_clicked:
-    LOGGER.info("[RUN] Recompute clicked")
     # Phase 2: weighted view
     X_weighted = build_weighted_matrix(
         X_fused=X_fused,
@@ -549,16 +393,31 @@ if generate_clicked:
         zip_w=st.session_state["zip_block_weight"],
     )
 
-    LOGGER.info(f"[RUN] Weighted matrix built: shape={X_weighted.shape}, pw={st.session_state['patient_block_weight']:.2f}, zw={st.session_state['zip_block_weight']:.2f}")
+    # Phase 3: neighbors (ANN or exact or mixed) + graph
+    similarity_metric = st.session_state.get("patient_similarity_metric", "cosine")
 
-    # Phase 3: neighbors (ANN or exact) + graph
-    idxs, sims, sim_full = topk_ann_or_exact(
-        X_weighted,
-        int(st.session_state["patient_graph_k"]),
-        ann_mode=st.session_state.get("patient_ann_mode", "auto"),
-        sim_threshold=int(st.session_state.get("patient_sim_threshold", SIM_BACKEND_THRESHOLD))
-    )
-    LOGGER.info(f"[RUN] Neighbor lists ready; sim_full={'present' if sim_full is not None else 'None (ANN path)'}")
+    if similarity_metric == "mixed" and encoding_mode == "experimental":
+        # Use custom mixed similarity for experimental encoding
+        encoding_meta = st.session_state.get("pf_encoding_metadata", {})
+        idxs, sims, sim_full = topk_mixed_similarity(
+            X_weighted,
+            int(st.session_state["patient_graph_k"]),
+            patient_cols=pat_cols,
+            zip_cols=zip_cols,
+            categorical_mappings=encoding_meta.get("categorical_mappings", {}),
+            bitflag_mapping=encoding_meta.get("bitflag_mapping", {}),
+            bitflag_column="comorbidities_encoded",
+            patient_w=st.session_state["patient_block_weight"],
+            zip_w=st.session_state["zip_block_weight"],
+        )
+    else:
+        # Standard cosine similarity (ANN or exact)
+        idxs, sims, sim_full = topk_ann_or_exact(
+            X_weighted,
+            int(st.session_state["patient_graph_k"]),
+            ann_mode=st.session_state.get("patient_ann_mode", "auto"),
+            sim_threshold=int(st.session_state.get("patient_sim_threshold", SIM_BACKEND_THRESHOLD))
+        )
     if sim_full is not None:
         sim_path = PATIENT_CACHE_DIR / (
             f"sim_k{st.session_state['patient_graph_k']}_"
@@ -575,7 +434,6 @@ if generate_clicked:
         topk_sim=sims,
         knn_type=st.session_state["patient_knn_type"],
     )
-    LOGGER.info(f"[RUN] Graph built: nodes={G.number_of_nodes()}, edges={G.number_of_edges()}, directed={G.is_directed()}")
 
     partition, betweenness, pagerank, degree = compute_graph_metrics(
         G,
@@ -583,7 +441,6 @@ if generate_clicked:
         btw_k=int(st.session_state.get("patient_btw_k", 400)),
         btw_threshold=int(st.session_state.get("patient_btw_threshold", BTW_AUTO_THRESHOLD)),
     )
-    LOGGER.info("[RUN] Metrics computed (partition, betweenness, pagerank, degree)")
 
     # Compact features table aligned to node order 0..n-1
     n = idxs.shape[0]
@@ -607,7 +464,6 @@ if generate_clicked:
         f"zw{st.session_state['zip_block_weight']:.2f}_"
         f"color{st.session_state.get('scatter_color_by', 'profile_community')}.png"
     )
-    LOGGER.info("[PLOT] Rendering scatter (PCA 2D) figure")
     fig_scatter = plot_profile_scatter_embed(
         X_weighted,
         tbl,
@@ -627,7 +483,6 @@ if generate_clicked:
             f"zw{st.session_state['zip_block_weight']:.2f}_"
             f"layout-{st.session_state['patient_graph_layout']}.png"
         )
-        LOGGER.info("[PLOT] Rendering network figure")
         fig_net = plot_networkx_graph(
             G,
             out_df=tbl,
@@ -670,8 +525,7 @@ if generate_clicked:
         "scatter_png": fig_cache["scatter"].get(scatter_key, {}).get("path"),
         "similarity_npy": graph_cache[graph_cache_key].get("sim_path"),
     }
-    LOGGER.info("[RUN] Active patient graph stored in session_state['active_patient_graph']")
-    
+
     st.success("PSN graph generated and set as active.")
 
     # --- Current Settings ---
@@ -730,7 +584,27 @@ if generate_clicked:
         {"Metric": "Number of Communities", "Value": num_communities},
         {"Metric": "Modularity", "Value": f"{modularity:.4f}" if modularity is not None else "N/A"},
         {"Metric": "Average Degree", "Value": f"{avg_degree:.2f}"},
-        {"Metric": "Similarity Backend", "Value": "ANN (PyNNDescent)" if (X_fused.shape[0] > int(st.session_state.get("patient_sim_threshold", SIM_BACKEND_THRESHOLD)) and HAS_PYNNDESCENT) else "Exact cosine"},
+        {
+            "Metric": "Similarity Metric",
+            "Value": (
+                "Mixed (experimental)" if similarity_metric == "mixed"
+                else "Cosine (standard)"
+            )
+        },
+        {
+            "Metric": "Similarity Backend",
+            "Value": (
+                "ANN (PyNNDescent)"
+                if (
+                    X_fused.shape[0] > int(
+                        st.session_state.get("patient_sim_threshold", SIM_BACKEND_THRESHOLD)
+                    )
+                    and HAS_PYNNDESCENT
+                    and similarity_metric == "cosine"
+                )
+                else "Exact" if similarity_metric == "mixed" else "Exact cosine"
+            )
+        },
         # {"Metric": "Network Plot", "Value": "Rendered" if n <= int(st.session_state.get("patient_plot_threshold", PLOT_GRAPH_THRESHOLD)) else f"Skipped (n>{int(st.session_state.get('patient_plot_threshold', PLOT_GRAPH_THRESHOLD))})"},
         {"Metric": "Betweenness Mode", "Value": st.session_state.get("patient_btw_mode", "auto")},
     ])

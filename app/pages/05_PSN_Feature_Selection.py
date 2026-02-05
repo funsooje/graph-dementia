@@ -67,6 +67,15 @@ def _safe_merge(left: pd.DataFrame, right: pd.DataFrame, on: str, how: str = "le
     return L.merge(R, on=on, how=how)
 
 # ---------------------------------------------------------------------
+# Import shared encoding utilities
+# ---------------------------------------------------------------------
+from app._logic.encoding import (
+    integer_encode_categoricals,
+    bitflag_encode_multibinary,
+    format_encoded_display,
+)
+
+# ---------------------------------------------------------------------
 # Initialize session state defaults
 # ---------------------------------------------------------------------
 if "pf_selected_demo" not in st.session_state:
@@ -75,20 +84,16 @@ if "pf_selected_util" not in st.session_state:
     st.session_state["pf_selected_util"] = []
 if "pf_selected_risk" not in st.session_state:
     st.session_state["pf_selected_risk"] = []
-if "pf_use_env" not in st.session_state:
-    st.session_state["pf_use_env"] = True
-if "pf_use_ses" not in st.session_state:
-    st.session_state["pf_use_ses"] = True
 if "pf_use_degree" not in st.session_state:
     st.session_state["pf_use_degree"] = False
 if "pf_use_pr" not in st.session_state:
     st.session_state["pf_use_pr"] = False
 if "pf_use_btw" not in st.session_state:
     st.session_state["pf_use_btw"] = False
-if "pf_onehot_comm" not in st.session_state:
-    st.session_state["pf_onehot_comm"] = False
-if "pf_split_by_zip" not in st.session_state:
-    st.session_state["pf_split_by_zip"] = False
+if "pf_use_zip_comm" not in st.session_state:
+    st.session_state["pf_use_zip_comm"] = False
+if "pf_experimental_encoding" not in st.session_state:
+    st.session_state["pf_experimental_encoding"] = False
 
 # ---------------------------------------------------------------------
 # Main page controls
@@ -144,43 +149,51 @@ st.divider()
 st.subheader("2. Neighborhood Features")
 st.caption("Select neighborhood-level features to include")
 
-zip_col1, zip_col2, zip_col3 = st.columns(3)
+zip_col1, zip_col2 = st.columns(2)
 
 with zip_col1:
-    use_env = st.checkbox("environment_index", value=st.session_state["pf_use_env"], key="zip_env")
-    use_ses = st.checkbox("ses_index", value=st.session_state["pf_use_ses"], key="zip_ses")
-
-with zip_col2:
     use_degree = st.checkbox("zip_degree", value=st.session_state["pf_use_degree"], key="zip_degree")
     use_pr = st.checkbox("zip_pagerank", value=st.session_state["pf_use_pr"], key="zip_pr")
 
-with zip_col3:
+with zip_col2:
     use_btw = st.checkbox("zip_betweenness", value=st.session_state["pf_use_btw"], key="zip_btw")
-    onehot_comm = st.checkbox("one-hot zip_community (split path only)", value=st.session_state["pf_onehot_comm"], key="zip_onehot")
+    use_zip_comm = st.checkbox("zip_community", value=st.session_state["pf_use_zip_comm"], key="zip_comm")
 
 # Update session state
-st.session_state["pf_use_env"] = use_env
-st.session_state["pf_use_ses"] = use_ses
 st.session_state["pf_use_degree"] = use_degree
 st.session_state["pf_use_pr"] = use_pr
 st.session_state["pf_use_btw"] = use_btw
-st.session_state["pf_onehot_comm"] = onehot_comm
+st.session_state["pf_use_zip_comm"] = use_zip_comm
 
 st.divider()
 
-# --- 3. ZIP Handling Section ---
-st.subheader("3. ZIP Handling")
-st.caption("Choose how to handle neighborhood features when ZIPCODE is not in profile columns")
+# --- 3. Experimental Encoding Section ---
+st.subheader("3. Experimental: Compact Encoding")
+st.caption("Use integer/bitflag encoding instead of one-hot for categoricals and comorbidities")
 
-split_by_zip = st.toggle(
-    "Split profiles by ZIP", value=st.session_state["pf_split_by_zip"], key="zip_split",
-    help="ON: Create separate profiles for each ZIP. OFF: Aggregate neighborhood features."
+experimental_encoding = st.toggle(
+    "Enable experimental encoding",
+    value=st.session_state["pf_experimental_encoding"],
+    key="experimental_toggle",
+    help=(
+        "Standard: One-hot encode all categoricals (more columns). "
+        "Experimental: Integer-encode categoricals + bitflag-encode comorbidities "
+        "(fewer columns, faster similarity)."
+    )
 )
-st.session_state["pf_split_by_zip"] = split_by_zip
+st.session_state["pf_experimental_encoding"] = experimental_encoding
+
+if experimental_encoding:
+    st.info(
+        "**Experimental mode:** Categoricals (Sex, Race, Age, Payer) will be integer-encoded. "
+        "Comorbidities (Hearingloss, BrainInjury, etc.) will be combined into a single bitflag column. "
+        "zip_community (if selected) will be integer-encoded in the neighborhood block. "
+        "This reduces dimensionality and enables custom similarity metrics on page 06."
+    )
 
 st.divider()
 
-# --- 4. Action Button ---
+# --- 5. Action Button ---
 generate_clicked = st.button("Generate PSN Features", type="primary", use_container_width=False)
 
 # ---------------------------------------------------------------------
@@ -191,14 +204,12 @@ if generate_clicked:
     st.session_state["pf_controls_run"] = {
         "selected_cols": selected_cols,
         "zip_features": {
-            "environment_index": use_env,
-            "ses_index": use_ses,
             "zip_degree": use_degree,
             "zip_pagerank": use_pr,
             "zip_betweenness": use_btw,
-            "onehot_zip_community": onehot_comm,
+            "zip_community": use_zip_comm,
         },
-        "split_by_zip": split_by_zip,
+        "experimental_encoding": experimental_encoding,
     }
 
     # ===================== STEP 2: profile construction =====================
@@ -218,30 +229,20 @@ if generate_clicked:
     base_grp = dfw.groupby(selected_cols, dropna=False).size().reset_index(name="profile_count")
     base_grp["profile_id"] = base_grp.apply(lambda r: _make_profile_id(r, selected_cols, "prof"), axis=1)
 
-    profiles_by_zip = None
+    # Always compute ZIP counts for weighted averaging (if ZIPCODE available)
     zip_counts = None
-
     if "ZIPCODE" not in selected_cols and "ZIPCODE" in dfw.columns:
-        if split_by_zip:
-            cols_zip = selected_cols + ["ZIPCODE"]
-            pbz = dfw.groupby(cols_zip, dropna=False).size().reset_index(name="profile_count")
-            pbz["profile_zip_id"] = pbz.apply(lambda r: _make_profile_id(r, cols_zip, "profzip"), axis=1)
-            profiles_by_zip = pbz
-        else:
-            zip_counts = (
-                dfw.groupby(selected_cols + ["ZIPCODE"], dropna=False)
-                   .size().reset_index(name="n")
-            )
+        zip_counts = (
+            dfw.groupby(selected_cols + ["ZIPCODE"], dropna=False)
+               .size().reset_index(name="n")
+        )
 
     st.session_state["pf_profiles_base"] = base_grp
-    st.session_state["pf_profiles_by_zip"] = profiles_by_zip
     st.session_state["pf_zip_counts"] = zip_counts
     st.session_state["pf_profiles_meta"] = {
         "selected_cols": selected_cols,
         "zip_in_selected": ("ZIPCODE" in selected_cols),
-        "split_by_zip": split_by_zip,
         "n_profiles_base": int(len(base_grp)),
-        "n_profiles_by_zip": int(len(profiles_by_zip)) if profiles_by_zip is not None else 0,
         "has_zip_counts": bool(zip_counts is not None),
     }
 
@@ -252,66 +253,82 @@ if generate_clicked:
     if zip_feats is None:
         st.warning("Neighborhood features not found. Go to page 02 (Neighborhood Graph) first.")
     else:
-        use_split = (("ZIPCODE" in selected_cols) or split_by_zip)
+        # Always use aggregate approach with weighted averaging
+        base = base_grp
+        zc = st.session_state.get("pf_zip_counts")
+        if zc is None:
+            st.error("Aggregate ZIP path requires pf_zip_counts. Reload the page and try again.")
+            st.stop()
 
-        if use_split:
-            prof_tbl = st.session_state.get("pf_profiles_by_zip")
-            if prof_tbl is None or prof_tbl.empty:
-                prof_tbl = base_grp
+        zc2 = _safe_merge(zc, zip_feats, on="ZIPCODE", how="left")
 
-            key_id_col = "profile_zip_id" if ("profile_zip_id" in prof_tbl.columns) else "profile_id"
-            join_key = "ZIPCODE" if ("ZIPCODE" in prof_tbl.columns) else None
-            if join_key is None:
-                st.error("Split path selected but no ZIPCODE column found in profiles. "
-                        "Include ZIPCODE in selected columns or turn off split toggle.")
-                st.stop()
-            fused_tbl = _safe_merge(prof_tbl, zip_feats, on="ZIPCODE", how="left")
+        # Determine grouping columns: add zip_community if selected
+        grouping_cols = selected_cols.copy()
+        if use_zip_comm and "zip_community" in zc2.columns:
+            grouping_cols = grouping_cols + ["zip_community"]
 
-        else:
-            base = base_grp
-            zc = st.session_state.get("pf_zip_counts")
-            if zc is None:
-                st.error("Aggregate ZIP path requires pf_zip_counts. Click Generate Fused Data again.")
-                st.stop()
+        # Numeric ZIP features to weighted-average by patient counts per ZIP within profile
+        zip_num_cols = []
+        if use_degree and "zip_degree" in zc2.columns: zip_num_cols.append("zip_degree")
+        if use_pr and "zip_pagerank" in zc2.columns: zip_num_cols.append("zip_pagerank")
+        if use_btw and "zip_betweenness" in zc2.columns: zip_num_cols.append("zip_betweenness")
 
-            zc2 = _safe_merge(zc, zip_feats, on="ZIPCODE", how="left")
+        if zip_num_cols or use_zip_comm:
+            zc2["n"] = zc2["n"].astype(float)
+            grp = zc2.groupby(grouping_cols, dropna=False)
 
-            # Numeric ZIP features to weighted-average by patient counts per ZIP within profile
-            zip_num_cols = []
-            if use_env: zip_num_cols.append("environment_index")
-            if use_ses: zip_num_cols.append("ses_index")
-            if use_degree and "zip_degree" in zc2.columns: zip_num_cols.append("zip_degree")
-            if use_pr and "zip_pagerank" in zc2.columns: zip_num_cols.append("zip_pagerank")
-            if use_btw and "zip_betweenness" in zc2.columns: zip_num_cols.append("zip_betweenness")
-
+            # Weighted-average numeric ZIP features
             if zip_num_cols:
-                zc2["n"] = zc2["n"].astype(float)
-                grp = zc2.groupby(selected_cols, dropna=False)
                 num_wavg = (grp.apply(lambda g: pd.Series(
                     {col: np.average(g[col].fillna(0.0), weights=g["n"]) for col in zip_num_cols}
                 )).reset_index())
             else:
-                num_wavg = base[selected_cols].copy()
+                # Only zip_community, no numeric features to average
+                num_wavg = pd.DataFrame({col: zc2[col] for col in grouping_cols}).drop_duplicates()
+        else:
+            num_wavg = base[selected_cols].copy()
 
-            fused_tbl = base.merge(num_wavg, on=selected_cols, how="left")
-            key_id_col = "profile_id"
-            join_key = None
+        fused_tbl = base.merge(num_wavg, on=selected_cols, how="left")
+        key_id_col = "profile_id"
 
         # Patient block (categoricals/binaries)
-        RISK = {"Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes"}
+        RISK = {
+            "Hearingloss", "BrainInjury", "Hypertension",
+            "Alcohol", "Obesity", "Diabetes"
+        }
         bin_cols = [c for c in selected_cols if c in RISK and c in fused_tbl.columns]
         cat_cols = [c for c in selected_cols if c not in bin_cols]
 
-        X_cat = _one_hot(fused_tbl, cat_cols)
-        X_bin = pd.DataFrame(index=fused_tbl.index)
-        for c in bin_cols:
-            X_bin[c] = pd.to_numeric(fused_tbl[c], errors="coerce").fillna(0.0).clip(0, 1).astype(float)
-        patient_block = pd.concat([X_cat, X_bin], axis=1)
+        # Experimental encoding mode
+        encoding_metadata = {
+            "mode": "experimental" if experimental_encoding else "standard",
+            "categorical_mappings": {},
+            "bitflag_mapping": {},
+        }
+
+        if experimental_encoding:
+            # Integer-encode categoricals
+            X_cat, cat_mappings = integer_encode_categoricals(fused_tbl, cat_cols)
+            encoding_metadata["categorical_mappings"] = cat_mappings
+
+            # Bitflag-encode comorbidities
+            X_bin, bitflag_map = bitflag_encode_multibinary(fused_tbl, bin_cols)
+            encoding_metadata["bitflag_mapping"] = bitflag_map
+
+            patient_block = pd.concat([X_cat, X_bin], axis=1)
+        else:
+            # Standard one-hot encoding
+            X_cat = _one_hot(fused_tbl, cat_cols)
+            X_bin = pd.DataFrame(index=fused_tbl.index)
+            for c in bin_cols:
+                X_bin[c] = (
+                    pd.to_numeric(fused_tbl[c], errors="coerce")
+                    .fillna(0.0).clip(0, 1).astype(float)
+                )
+            patient_block = pd.concat([X_cat, X_bin], axis=1)
 
         # ZIP block (numeric std + optional one-hot community on split path)
         zip_num_cols2 = []
-        if use_env and "environment_index" in fused_tbl.columns: zip_num_cols2.append("environment_index")
-        if use_ses and "ses_index" in fused_tbl.columns: zip_num_cols2.append("ses_index")
         if use_degree and "zip_degree" in fused_tbl.columns: zip_num_cols2.append("zip_degree")
         if use_pr and "zip_pagerank" in fused_tbl.columns: zip_num_cols2.append("zip_pagerank")
         if use_btw and "zip_betweenness" in fused_tbl.columns: zip_num_cols2.append("zip_betweenness")
@@ -322,11 +339,20 @@ if generate_clicked:
         )
         zip_num_std = _standardize(zip_num_df) if not zip_num_df.empty else zip_num_df
 
-        zip_onehot_df = pd.DataFrame(index=fused_tbl.index)
-        if onehot_comm and use_split and "zip_community" in fused_tbl.columns:
-            zip_onehot_df = _one_hot(fused_tbl, ["zip_community"])
+        # Handle zip_community encoding (experimental vs standard)
+        zip_comm_df = pd.DataFrame(index=fused_tbl.index)
+        if use_zip_comm and "zip_community" in fused_tbl.columns:
+            if experimental_encoding:
+                # Integer encode zip_community
+                zip_comm_df, comm_mapping = integer_encode_categoricals(
+                    fused_tbl, ["zip_community"]
+                )
+                encoding_metadata["categorical_mappings"].update(comm_mapping)
+            else:
+                # One-hot encode zip_community
+                zip_comm_df = _one_hot(fused_tbl, ["zip_community"])
 
-        zip_block = pd.concat([zip_num_std, zip_onehot_df], axis=1)
+        zip_block = pd.concat([zip_num_std, zip_comm_df], axis=1)
 
         # Final fused (no block weights on this page)
         X_fused = pd.concat([patient_block, zip_block], axis=1).fillna(0.0)
@@ -336,16 +362,24 @@ if generate_clicked:
         st.session_state["pf_patient_block_cols"] = list(patient_block.columns)
         st.session_state["pf_zip_block_cols"]     = list(zip_block.columns)
         st.session_state["pf_fused_matrix"]  = X_fused.values
-        st.session_state["pf_fused_index"]   = fused_tbl.get(key_id_col, pd.Series(range(len(fused_tbl)))).tolist()
-        st.session_state["pf_fused_counts"]  = fused_tbl.get("profile_count", pd.Series([np.nan]*len(fused_tbl))).tolist()
+        st.session_state["pf_fused_index"]   = (
+            fused_tbl.get(
+                key_id_col, pd.Series(range(len(fused_tbl)))
+            ).tolist()
+        )
+        st.session_state["pf_fused_counts"]  = (
+            fused_tbl.get(
+                "profile_count", pd.Series([np.nan]*len(fused_tbl))
+            ).tolist()
+        )
+        st.session_state["pf_encoding_metadata"] = encoding_metadata
         st.session_state["pf_fused_meta"]    = {
             "rows": int(X_fused.shape[0]),
             "cols_total": int(X_fused.shape[1]),
             "cols_patient": int(patient_block.shape[1]),
             "cols_zip": int(zip_block.shape[1]),
             "key_id_col": key_id_col,
-            "use_split": use_split,
-            "join_key": join_key,
+            "encoding_mode": encoding_metadata["mode"],
         }
 
         st.success(f"PSN features generated: {X_fused.shape[0]} rows × {X_fused.shape[1]} cols.")
@@ -362,9 +396,18 @@ if generate_clicked or "pf_profiles_base" in st.session_state:
         st.subheader("Run Settings")
         run = st.session_state["pf_controls_run"]
         settings_df = pd.DataFrame([
-            {"Parameter": "Profile Columns", "Value": ", ".join(run["selected_cols"]) if run["selected_cols"] else "None"},
-            {"Parameter": "Neighborhood Features", "Value": ", ".join([k for k, v in run["zip_features"].items() if v]) or "None"},
-            {"Parameter": "Split by ZIP", "Value": "Yes" if run["split_by_zip"] else "No"},
+            {
+                "Parameter": "Profile Columns",
+                "Value": ", ".join(run["selected_cols"]) if run["selected_cols"] else "None"
+            },
+            {
+                "Parameter": "Neighborhood Features",
+                "Value": ", ".join([k for k, v in run["zip_features"].items() if v]) or "None"
+            },
+            {
+                "Parameter": "Encoding Mode",
+                "Value": "Experimental" if run.get("experimental_encoding", False) else "Standard"
+            },
         ])
         st.dataframe(settings_df, use_container_width=False, hide_index=True)
     else:
@@ -378,10 +421,11 @@ if generate_clicked or "pf_profiles_base" in st.session_state:
             {"Metric": "Total Rows", "Value": meta.get("rows", "N/A")},
             {"Metric": "Total Columns", "Value": meta.get("cols_total", "N/A")},
             {"Metric": "Patient Block Columns", "Value": meta.get("cols_patient", "N/A")},
-            {"Metric": "Neighborhood Block Columns", "Value": meta.get("cols_zip", "N/A")},
-            # {"Metric": "Key ID Column", "Value": meta.get("key_id_col", "N/A")},
-            {"Metric": "Use Split", "Value": "Yes" if meta.get("use_split") else "No"},
-            # {"Metric": "Join Key", "Value": meta.get("join_key", "N/A")},
+            {
+                "Metric": "Neighborhood Block Columns",
+                "Value": meta.get("cols_zip", "N/A")
+            },
+            {"Metric": "Encoding Mode", "Value": meta.get("encoding_mode", "standard")},
         ])
         st.dataframe(summary_df, width='content', hide_index=True)
         
@@ -407,3 +451,58 @@ if generate_clicked or "pf_profiles_base" in st.session_state:
     ft = st.session_state.get("pf_fused_table")
     if ft is not None:
         st.dataframe(ft.head(12), width='content', hide_index=True)
+
+    # --- Encoded matrix preview (experimental mode) ---
+    meta = st.session_state.get("pf_fused_meta", {})
+    if meta.get("encoding_mode") == "experimental":
+        st.subheader("Encoded Feature Matrix — Preview (Experimental)")
+        st.caption(
+            "Integer-encoded categoricals + bitflag-encoded comorbidities "
+            "+ standardized neighborhood features"
+        )
+
+        fused_matrix = st.session_state.get("pf_fused_matrix")
+        patient_cols = st.session_state.get("pf_patient_block_cols", [])
+        zip_cols = st.session_state.get("pf_zip_block_cols", [])
+
+        if fused_matrix is not None and (patient_cols or zip_cols):
+            all_cols = patient_cols + zip_cols
+            encoded_df = pd.DataFrame(
+                fused_matrix[:12],  # First 12 rows
+                columns=all_cols
+            )
+
+            # Format encoded columns for readability
+            encoding_meta = st.session_state.get("pf_encoding_metadata", {})
+            cat_maps = encoding_meta.get("categorical_mappings", {})
+            bitflag_map = encoding_meta.get("bitflag_mapping", {})
+
+            # Use shared formatting function
+            encoded_df = format_encoded_display(
+                encoded_df,
+                cat_maps,
+                bitflag_map,
+                bitflag_column="comorbidities_encoded"
+            )
+
+            st.dataframe(encoded_df, width='content', hide_index=True)
+
+            with st.expander("View Encoding Mappings", expanded=False):
+                # Categorical mappings
+                cat_maps = encoding_meta.get("categorical_mappings", {})
+                if cat_maps:
+                    st.caption("**Categorical Encodings**")
+                    for col_name, mapping in cat_maps.items():
+                        st.text(f"{col_name}_encoded:")
+                        mapping_str = ", ".join(
+                            f"{cat}={val}" for cat, val in mapping.items()
+                        )
+                        st.caption(f"  {mapping_str}")
+
+                # Bitflag mapping
+                bitflag_map = encoding_meta.get("bitflag_mapping", {})
+                if bitflag_map:
+                    st.caption("**Comorbidities Encoding (Bitflag)**")
+                    st.text("comorbidities_encoded bits:")
+                    for bit_position, col_name in bitflag_map.items():
+                        st.caption(f"  Bit {bit_position}: {col_name}")

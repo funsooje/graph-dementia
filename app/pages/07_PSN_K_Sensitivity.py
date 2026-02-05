@@ -3,15 +3,17 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-from sklearn.metrics.pairwise import cosine_similarity
 import networkx as nx
 import community as community_louvain
 
-try:
-    from pynndescent import NNDescent
-    HAS_PYNNDESCENT = True
-except ImportError:
-    HAS_PYNNDESCENT = False
+# Import PSN graph building utilities from shared module
+from app._logic.psn_graph_builder import (
+    build_weighted_matrix,
+    topk_ann_or_exact,
+    topk_mixed_similarity,
+    build_knn_graph_from_neighbors,
+    HAS_PYNNDESCENT,
+)
 
 # ---------------------------------------------------------------------
 # Page setup
@@ -25,94 +27,8 @@ st.title("PSN K Sensitivity Analysis")
 SIM_BACKEND_THRESHOLD = 5000
 
 # ---------------------------------------------------------------------
-# Helper functions (copied from 06_PSN_Graph.py for independence)
+# Helper functions
 # ---------------------------------------------------------------------
-def build_weighted_matrix(X_fused, patient_cols, zip_cols, patient_w: float, zip_w: float):
-    """Reweights the fused matrix by block."""
-    n_pat = len(patient_cols) if patient_cols is not None else 0
-    n_zip = len(zip_cols) if zip_cols is not None else 0
-
-    Xw = X_fused.astype(float).copy()
-    if n_pat > 0:
-        Xw[:, :n_pat] *= float(patient_w)
-    if n_zip > 0:
-        Xw[:, n_pat:n_pat + n_zip] *= float(zip_w)
-    return Xw
-
-
-def topk_exact_from_matrix(X: np.ndarray, k: int):
-    """Exact cosine similarity top-k neighbors."""
-    n, d = X.shape
-    sim = cosine_similarity(X)
-    np.fill_diagonal(sim, -np.inf)
-    idxs = np.empty((n, k), dtype=int)
-    sims = np.empty((n, k), dtype=float)
-    for i in range(n):
-        idx = np.argpartition(sim[i], -k)[-k:]
-        idx = idx[np.argsort(sim[i, idx])[::-1]]
-        idxs[i] = idx
-        sims[i] = sim[i, idx]
-    return idxs, sims, sim
-
-
-def topk_ann_or_exact(X: np.ndarray, k: int, ann_mode: str, sim_threshold: int):
-    """Use ANN (PyNNDescent) or exact cosine similarity."""
-    n, d = X.shape
-    use_ann = False
-    if ann_mode == "force_ann" and HAS_PYNNDESCENT:
-        use_ann = True
-    elif ann_mode == "force_exact":
-        use_ann = False
-    elif ann_mode == "auto" and n > sim_threshold and HAS_PYNNDESCENT:
-        use_ann = True
-
-    if use_ann:
-        index = NNDescent(X, metric="cosine", n_neighbors=k+1, random_state=42)
-        nbrs_idx, nbrs_dist = index.query(X, k=k+1)
-        idxs = np.zeros((n, k), dtype=int)
-        sims = np.zeros((n, k), dtype=float)
-        for i in range(n):
-            row_idx = nbrs_idx[i].tolist()
-            row_dst = nbrs_dist[i].tolist()
-            cleaned = [(j, d_) for j, d_ in zip(row_idx, row_dst) if j != i]
-            cleaned = cleaned[:k] if len(cleaned) >= k else cleaned
-            while len(cleaned) < k:
-                cleaned.append((i, 1.0))
-            idxs[i] = [j for j, _ in cleaned]
-            sims[i] = [1.0 - d_ for _, d_ in cleaned]
-        return idxs, sims, None
-
-    return topk_exact_from_matrix(X, k)
-
-
-def build_knn_graph_from_neighbors(topk_idx: np.ndarray, topk_sim: np.ndarray, knn_type: str):
-    """Build k-NN graph from neighbor lists."""
-    n, k = topk_idx.shape
-    if knn_type == "directed":
-        G = nx.DiGraph()
-        G.add_nodes_from(range(n))
-        for i in range(n):
-            for r in range(k):
-                j = int(topk_idx[i, r])
-                w = float(topk_sim[i, r])
-                if np.isfinite(w):
-                    G.add_edge(i, j, weight=w)
-        return G
-
-    neighbor_sets = [set(topk_idx[i]) for i in range(n)]
-    G = nx.Graph()
-    G.add_nodes_from(range(n))
-    for i in range(n):
-        for j in neighbor_sets[i]:
-            if i < j and i in neighbor_sets[j]:
-                wi = float(topk_sim[i, np.where(topk_idx[i] == j)[0][0]])
-                wj = float(topk_sim[j, np.where(topk_idx[j] == i)[0][0]])
-                w = (wi + wj) / 2.0
-                if np.isfinite(w):
-                    G.add_edge(i, int(j), weight=w)
-    return G
-
-
 def compute_psn_metrics(G: nx.Graph):
     """Compute graph metrics for PSN sensitivity analysis."""
     n = G.number_of_nodes()
@@ -179,10 +95,16 @@ if missing:
 # Show data summary
 st.subheader("Data Summary")
 n_rows, n_cols = X_fused.shape if isinstance(X_fused, np.ndarray) else (None, None)
+
+# Get encoding mode from session state
+encoding_meta = st.session_state.get("pf_encoding_metadata", {})
+encoding_mode = encoding_meta.get("mode", "unknown")
+
 summary_df = pd.DataFrame([
     {"Metric": "PSN Matrix Shape", "Value": f"{n_rows} × {n_cols}"},
     {"Metric": "Profile Block Cols", "Value": len(pat_cols)},
     {"Metric": "Neighborhood Block Cols", "Value": len(zip_cols)},
+    {"Metric": "Encoding Mode", "Value": encoding_mode.capitalize()},
 ])
 st.dataframe(summary_df, use_container_width=False, hide_index=True)
 
@@ -230,6 +152,39 @@ with col4:
         "auto" if ann_mode_label.startswith("Auto") else
         "force_ann" if ann_mode_label.startswith("Force ANN") else
         "force_exact"
+    )
+
+# Similarity metric selector (shown only for experimental encoding)
+if encoding_mode == "experimental":
+    st.markdown("**Similarity Metric**")
+    st.caption("Experimental encoding detected. Choose similarity metric:")
+
+    # Initialize session state for similarity metric if not present
+    if "psn_k_sensitivity_similarity_metric" not in st.session_state:
+        st.session_state["psn_k_sensitivity_similarity_metric"] = "cosine"
+
+    metric_options = [
+        "Cosine Similarity (default)",
+        "Mixed Similarity (recommended for experimental)"
+    ]
+    metric_default = st.session_state.get("psn_k_sensitivity_similarity_metric", "cosine")
+    metric_idx = 0 if metric_default == "cosine" else 1
+
+    metric_choice = st.radio(
+        "Metric",
+        metric_options,
+        index=metric_idx,
+        help=(
+            "Cosine: Standard cosine similarity (faster, works on any encoding).\n\n"
+            "Mixed: Custom metric combining exact-match for categoricals + "
+            "Hamming distance for bitflags + cosine for numeric (slower, more accurate for experimental encoding)."
+        ),
+        label_visibility="collapsed"
+    )
+
+    # Update session state
+    st.session_state["psn_k_sensitivity_similarity_metric"] = (
+        "cosine" if metric_choice.startswith("Cosine") else "mixed"
     )
 
 run_analysis = st.button("Run Analysis", type="primary")
@@ -296,10 +251,28 @@ if run_analysis and k_values and weight_values:
             status_text.text(f"Processing: weight={weight:.2f}, k={k}")
 
             try:
-                # Get neighbors
-                idxs, sims, _ = topk_ann_or_exact(
-                    X_weighted, k, ann_mode, SIM_BACKEND_THRESHOLD
-                )
+                # Get similarity metric from session state
+                similarity_metric = st.session_state.get("psn_k_sensitivity_similarity_metric", "cosine")
+
+                # Get neighbors using appropriate similarity metric
+                if similarity_metric == "mixed" and encoding_mode == "experimental":
+                    # Use custom mixed similarity for experimental encoding
+                    idxs, sims, _ = topk_mixed_similarity(
+                        X_weighted,
+                        k,
+                        patient_cols=pat_cols,
+                        zip_cols=zip_cols,
+                        categorical_mappings=encoding_meta.get("categorical_mappings", {}),
+                        bitflag_mapping=encoding_meta.get("bitflag_mapping", {}),
+                        bitflag_column="comorbidities_encoded",
+                        patient_w=patient_w,
+                        zip_w=zip_w,
+                    )
+                else:
+                    # Standard cosine similarity (ANN or exact)
+                    idxs, sims, _ = topk_ann_or_exact(
+                        X_weighted, k, ann_mode, SIM_BACKEND_THRESHOLD
+                    )
 
                 # Build graph
                 G = build_knn_graph_from_neighbors(idxs, sims, knn_type)
@@ -348,6 +321,8 @@ if run_analysis and k_values and weight_values:
         "weight_values": weight_values,
         "knn_type": knn_type,
         "ann_mode": ann_mode,
+        "similarity_metric": st.session_state.get("psn_k_sensitivity_similarity_metric", "cosine"),
+        "encoding_mode": encoding_mode,
     }
 
     st.success(
@@ -364,10 +339,18 @@ if "psn_k_sensitivity_results" in st.session_state:
     st.subheader("Cross-Tab Results")
 
     if settings:
-        st.caption(
-            f"Graph type: {settings.get('knn_type', 'N/A')}, "
-            f"Similarity mode: {settings.get('ann_mode', 'N/A')}"
-        )
+        # Build settings caption
+        caption_parts = [
+            f"Graph type: {settings.get('knn_type', 'N/A')}",
+            f"Similarity mode: {settings.get('ann_mode', 'N/A')}",
+        ]
+
+        # Add similarity metric if experimental encoding
+        if settings.get('encoding_mode') == 'experimental':
+            sim_metric = settings.get('similarity_metric', 'cosine')
+            caption_parts.append(f"Similarity metric: {sim_metric}")
+
+        st.caption(", ".join(caption_parts))
 
     # Calculate height to show all rows
     table_height = (len(crosstab_df) + 1) * 35 + 10
