@@ -25,11 +25,11 @@ if zip_feats_initial is None:
 # Groupings (binned/cleaned only)
 # ---------------------------------------------------------------------
 PAT_GROUPS = {
-    "ids": ["SEQ_NO", "REC_KEY"],
+    "ids": ["SEQ_NO", "REC_KEY", "PATIENTID"],
     "location": ["ZIPCODE"],
-    "demographics": ["SEX", "Race", "AGE_BIN"],
-    "utilization": ["LENSTAYD_BIN", "PAYER"],
-    "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes"],
+    "demographics": ["SEX", "Race", "AGE_BIN", "PATIENTID"],
+    "utilization": ["LENSTAYD_BIN", "LENSTAYD_LOG", "PAYER"],
+    "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes", "REVISIT_30"],
 }
 
 # ---------------------------------------------------------------------

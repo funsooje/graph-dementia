@@ -61,11 +61,11 @@ def df_fingerprint(df: pd.DataFrame, cols: list, sample: int = 1000) -> str:
 # Column groups
 # ---------------------------------------------------------------------
 PAT_GROUPS = {
-    "ids": ["SEQ_NO", "REC_KEY"],
+    "ids": ["SEQ_NO", "REC_KEY", "PATIENTID"],
     "location": ["ZIPCODE"],
     "demographics": ["AGE", "SEX", "Race", "AGE_BIN"],
-    "utilization": ["STAYTYPE", "LENSTAYD", "LENSTAYD_BIN", "DIAGCNT", "PAYER"],
-    "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes"],
+    "utilization": ["STAYTYPE", "LENSTAYD", "LENSTAYD_BIN", "LENSTAYD_LOG", "DIAGCNT", "PAYER"],
+    "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes", "REVISIT_30"],
 }
 
 ZIP_GROUPS = {

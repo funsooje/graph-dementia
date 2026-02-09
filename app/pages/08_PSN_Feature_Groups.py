@@ -51,9 +51,9 @@ zip_feats = st.session_state.get("zip_features")
 # Available columns
 # ---------------------------------------------------------------------
 PAT_GROUPS = {
-    "demographics": ["SEX", "Race", "AGE_BIN"],
-    "utilization": ["LENSTAYD_BIN", "PAYER"],
-    "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes"],
+    "demographics": ["SEX", "Race", "AGE_BIN", "PATIENTID"],
+    "utilization": ["LENSTAYD_BIN", "LENSTAYD_LOG", "PAYER"],
+    "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes", "REVISIT_30"],
 }
 
 demo_cols = [c for c in PAT_GROUPS["demographics"] if c in pat.columns]
@@ -104,23 +104,17 @@ selected_cols = selected_demo + selected_util + selected_risk
 # Neighborhood features (compact row)
 if zip_available:
     st.caption("Neighborhood Features")
-    zcol1, zcol2, zcol3, zcol4, zcol5, zcol6, zcol7 = st.columns(7)
+    zcol1, zcol2, zcol3, zcol4 = st.columns(4)
     with zcol1:
-        use_env = st.checkbox("environment_index", key="new_env")
-    with zcol2:
-        use_ses = st.checkbox("ses_index", key="new_ses")
-    with zcol3:
         use_degree = st.checkbox("zip_degree", key="new_deg")
-    with zcol4:
+    with zcol2:
         use_pr = st.checkbox("zip_pagerank", key="new_pr")
-    with zcol5:
+    with zcol3:
         use_btw = st.checkbox("zip_betweenness", key="new_btw")
-    with zcol6:
-        onehot_comm = st.checkbox("zip_community", key="new_comm", help="One-hot encode (split path only)")
-    with zcol7:
-        split_by_zip = st.checkbox("Split by ZIP", key="new_split")
+    with zcol4:
+        use_zip_comm = st.checkbox("zip_community", key="new_comm", help="Encoding depends on experimental mode")
 else:
-    use_env = use_ses = use_degree = use_pr = use_btw = onehot_comm = split_by_zip = False
+    use_degree = use_pr = use_btw = use_zip_comm = False
     st.caption("Neighborhood features unavailable (run page 02 first)")
 
 # Weight balance
@@ -134,6 +128,76 @@ with wcol1:
     )
 with wcol2:
     st.caption(f"Profile: {1-weight_balance:.0%} | Neighborhood: {weight_balance:.0%}")
+
+st.divider()
+
+# ---------------------------------------------------------------------
+# Graph Construction Settings
+# ---------------------------------------------------------------------
+st.caption("**Graph Construction Settings**")
+
+# Row 1: Encoding mode and k value
+gcol1, gcol2 = st.columns(2)
+
+with gcol1:
+    experimental_encoding = st.toggle(
+        "Experimental Encoding",
+        value=False,
+        key="new_experimental",
+        help="Standard: One-hot encode categoricals. Experimental: Integer-encode categoricals + bitflag-encode comorbidities."
+    )
+
+with gcol2:
+    k_value = st.number_input(
+        "k (number of neighbors)",
+        min_value=1, max_value=50, value=5, step=1,
+        key="new_k",
+        help="Number of nearest neighbors for k-NN graph construction"
+    )
+
+# Row 2: Similarity metric (conditional), k-NN type, ANN mode
+gcol3, gcol4, gcol5 = st.columns(3)
+
+with gcol3:
+    if experimental_encoding:
+        similarity_metric_label = st.selectbox(
+            "Similarity Metric",
+            options=["Cosine Similarity", "Mixed Similarity (recommended)"],
+            index=1,
+            key="new_sim_metric",
+            help="Cosine: Standard cosine similarity. Mixed: Exact-match for categoricals + Hamming for bitflags + cosine for numeric."
+        )
+        similarity_metric = "mixed" if similarity_metric_label.startswith("Mixed") else "cosine"
+    else:
+        st.caption("Similarity Metric")
+        st.text("Cosine (standard)")
+        similarity_metric = "cosine"
+
+with gcol4:
+    knn_type_label = st.selectbox(
+        "Graph Type",
+        options=["Mutual k-NN (undirected)", "Directed k-NN"],
+        index=0,
+        key="new_knn_type",
+        help="Mutual: Undirected edges (both nodes must be in each other's k-NN). Directed: One-way edges."
+    )
+    knn_type = "mutual" if knn_type_label.startswith("Mutual") else "directed"
+
+with gcol5:
+    ann_mode_label = st.selectbox(
+        "Similarity Mode",
+        options=["Auto (threshold)", "Force ANN", "Force Exact"],
+        index=0,
+        key="new_ann_mode",
+        help="Auto: Use ANN for large datasets. Force ANN: Always use approximate. Force Exact: Always use exact."
+    )
+    ann_mode = (
+        "auto" if ann_mode_label.startswith("Auto") else
+        "force_ann" if ann_mode_label.startswith("Force ANN") else
+        "force_exact"
+    )
+
+st.divider()
 
 # Save button
 if st.button("Save Feature Group", type="primary"):
@@ -153,15 +217,18 @@ if st.button("Save Feature Group", type="primary"):
                 "risk_binaries": selected_risk,
             },
             "neighborhood_features": {
-                "environment_index": use_env,
-                "ses_index": use_ses,
                 "zip_degree": use_degree,
                 "zip_pagerank": use_pr,
                 "zip_betweenness": use_btw,
-                "onehot_zip_community": onehot_comm,
+                "zip_community": use_zip_comm,
             },
-            "split_by_zip": split_by_zip,
             "weight_balance": weight_balance,
+            # Graph construction settings
+            "experimental_encoding": experimental_encoding,
+            "similarity_metric": similarity_metric,
+            "k": int(k_value),
+            "knn_type": knn_type,
+            "ann_mode": ann_mode,
         }
         st.session_state["psn_feature_groups"][group_name] = config
         save_psn_groups(st.session_state["psn_feature_groups"])
@@ -187,12 +254,24 @@ else:
         zip_feats_cfg = cfg.get("neighborhood_features", {})
         active_zip = [k.replace("_index", "").replace("zip_", "") for k, v in zip_feats_cfg.items() if v]
         wb = cfg.get("weight_balance", 0.3)
+
+        # Get graph construction settings (with defaults for backward compatibility)
+        encoding = "Exp" if cfg.get("experimental_encoding", False) else "Std"
+        sim_metric = cfg.get("similarity_metric", "cosine")
+        k_val = cfg.get("k", 5)
+        knn = cfg.get("knn_type", "mutual")
+        ann = cfg.get("ann_mode", "auto")
+
         rows.append({
             "Name": gname,
             "Profile Columns": profile[:40] + "..." if len(profile) > 40 else profile,
             "Neighborhood": ", ".join(active_zip) if active_zip else "-",
             "Weight": f"P:{1-wb:.0%} N:{wb:.0%}",
-            "Split": "Y" if cfg.get("split_by_zip") else "N",
+            "Encoding": encoding,
+            "Similarity": sim_metric[:3],  # cos or mix
+            "k": k_val,
+            "Type": knn[:3],  # mut or dir
+            "ANN": ann[:4],  # auto, forc (for force_ann/force_exact)
         })
 
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
