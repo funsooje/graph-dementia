@@ -61,11 +61,12 @@ def df_fingerprint(df: pd.DataFrame, cols: list, sample: int = 1000) -> str:
 # Column groups
 # ---------------------------------------------------------------------
 PAT_GROUPS = {
-    "ids": ["SEQ_NO", "REC_KEY", "PATIENTID"],
+    "ids": ["PATIENTID"],
     "location": ["ZIPCODE"],
     "demographics": ["AGE", "SEX", "Race", "AGE_BIN"],
-    "utilization": ["STAYTYPE", "LENSTAYD", "LENSTAYD_BIN", "LENSTAYD_LOG", "DIAGCNT", "PAYER"],
-    "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes", "REVISIT_30"],
+    "utilization": ["LENSTAYD", "LENSTAYD_BIN", "LENSTAYD_LOG", "PAYER", "NUM_VISITS"],
+    "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes"],
+    "outcomes": ["READMIT_PROPORTION", "EVER_READMITTED"],
 }
 
 ZIP_GROUPS = {
@@ -91,7 +92,7 @@ ZIP_GROUPS = {
 }
 
 def data_cache_key(pat: pd.DataFrame, zipc: pd.DataFrame) -> str:
-    pat_cols = PAT_GROUPS["location"] + PAT_GROUPS["demographics"] + PAT_GROUPS["utilization"] + PAT_GROUPS["risk_binaries"]
+    pat_cols = PAT_GROUPS["location"] + PAT_GROUPS["demographics"] + PAT_GROUPS["utilization"] + PAT_GROUPS["risk_binaries"] + PAT_GROUPS["outcomes"]
     zip_cols = ZIP_GROUPS["zip_key"] + ZIP_GROUPS["env_raw"] + ZIP_GROUPS["socdem_raw"] + ZIP_GROUPS["env_norm"] + ZIP_GROUPS["socdem_norm"]
     return hashlib.sha1(
         f"pat:{df_fingerprint(pat, pat_cols)}|zip:{df_fingerprint(zipc, zip_cols)}".encode("utf-8")

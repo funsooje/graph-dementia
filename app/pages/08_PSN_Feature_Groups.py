@@ -51,9 +51,10 @@ zip_feats = st.session_state.get("zip_features")
 # Available columns
 # ---------------------------------------------------------------------
 PAT_GROUPS = {
-    "demographics": ["SEX", "Race", "AGE_BIN", "PATIENTID"],
-    "utilization": ["LENSTAYD_BIN", "LENSTAYD_LOG", "PAYER"],
-    "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes", "REVISIT_30"],
+    "demographics": ["SEX", "Race", "AGE_BIN"],
+    "utilization": ["LENSTAYD_BIN", "LENSTAYD_LOG", "PAYER", "NUM_VISITS"],
+    "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes"],
+    "outcomes": ["READMIT_PROPORTION", "EVER_READMITTED"],
 }
 
 demo_cols = [c for c in PAT_GROUPS["demographics"] if c in pat.columns]
@@ -95,11 +96,22 @@ if risk_cols:
         with rcols[i]:
             risk_checks[col] = st.checkbox(col, key=f"new_risk_{col}")
 
+# Profile Features - Outcomes
+st.caption("Outcomes")
+outcome_cols = [c for c in PAT_GROUPS.get("outcomes", []) if c in pat.columns]
+outcome_checks = {}
+if outcome_cols:
+    ocols = st.columns(len(outcome_cols))
+    for i, col in enumerate(outcome_cols):
+        with ocols[i]:
+            outcome_checks[col] = st.checkbox(col, key=f"new_outcome_{col}")
+
 # Gather selected columns
 selected_demo = [c for c, v in demo_checks.items() if v]
 selected_util = [c for c, v in util_checks.items() if v]
 selected_risk = [c for c, v in risk_checks.items() if v]
-selected_cols = selected_demo + selected_util + selected_risk
+selected_outcome = [c for c, v in outcome_checks.items() if v]
+selected_cols = selected_demo + selected_util + selected_risk + selected_outcome
 
 # Neighborhood features (compact row)
 if zip_available:
@@ -141,10 +153,10 @@ gcol1, gcol2 = st.columns(2)
 
 with gcol1:
     experimental_encoding = st.toggle(
-        "Experimental Encoding",
-        value=False,
+        "Compact Encoding (recommended)",
+        value=True,
         key="new_experimental",
-        help="Standard: One-hot encode categoricals. Experimental: Integer-encode categoricals + bitflag-encode comorbidities."
+        help="Compact (default): Integer-encode categoricals + bitflag-encode comorbidities. Standard (unchecked): One-hot encode categoricals."
     )
 
 with gcol2:

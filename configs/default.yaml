@@ -1,5 +1,5 @@
 paths:
-  patients: data/processed/patients_processed.csv
+  patients: data/processed/patients_patient_level.csv
   zip_context: data/raw/zip_context.csv
   zip_coords: data/raw/uszips.csv
   wa_state_zip: data/raw/cb_2020_us_state_20m.zip

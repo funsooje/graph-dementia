@@ -25,11 +25,12 @@ if zip_feats_initial is None:
 # Groupings (binned/cleaned only)
 # ---------------------------------------------------------------------
 PAT_GROUPS = {
-    "ids": ["SEQ_NO", "REC_KEY", "PATIENTID"],
+    "ids": ["PATIENTID"],
     "location": ["ZIPCODE"],
-    "demographics": ["SEX", "Race", "AGE_BIN", "PATIENTID"],
-    "utilization": ["LENSTAYD_BIN", "LENSTAYD_LOG", "PAYER"],
-    "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes", "REVISIT_30"],
+    "demographics": ["SEX", "Race", "AGE_BIN"],
+    "utilization": ["LENSTAYD_BIN", "LENSTAYD_LOG", "PAYER", "NUM_VISITS"],
+    "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes"],
+    "outcomes": ["READMIT_PROPORTION", "EVER_READMITTED"],
 }
 
 # ---------------------------------------------------------------------
@@ -93,7 +94,7 @@ if "pf_use_btw" not in st.session_state:
 if "pf_use_zip_comm" not in st.session_state:
     st.session_state["pf_use_zip_comm"] = False
 if "pf_experimental_encoding" not in st.session_state:
-    st.session_state["pf_experimental_encoding"] = False
+    st.session_state["pf_experimental_encoding"] = True
 
 # ---------------------------------------------------------------------
 # Main page controls
@@ -167,21 +168,27 @@ st.session_state["pf_use_zip_comm"] = use_zip_comm
 
 st.divider()
 
-# --- 3. Experimental Encoding Section ---
-st.subheader("3. Experimental: Compact Encoding")
-st.caption("Use integer/bitflag encoding instead of one-hot for categoricals and comorbidities")
+# --- 3. Encoding Options ---
+st.subheader("3. Encoding Method")
+st.caption("Default: Compact encoding (integer + bitflag). Expand to use standard one-hot encoding.")
 
-experimental_encoding = st.toggle(
-    "Enable experimental encoding",
-    value=st.session_state["pf_experimental_encoding"],
-    key="experimental_toggle",
-    help=(
-        "Standard: One-hot encode all categoricals (more columns). "
-        "Experimental: Integer-encode categoricals + bitflag-encode comorbidities "
-        "(fewer columns, faster similarity)."
+with st.expander("⚙️ Change Encoding Method"):
+    experimental_encoding = st.toggle(
+        "Use compact encoding (recommended)",
+        value=st.session_state["pf_experimental_encoding"],
+        key="experimental_toggle",
+        help=(
+            "Compact (default): Integer-encode categoricals + bitflag-encode comorbidities "
+            "(fewer columns, faster similarity). "
+            "Standard (unchecked): One-hot encode all categoricals (more columns)."
+        )
     )
-)
-st.session_state["pf_experimental_encoding"] = experimental_encoding
+    st.session_state["pf_experimental_encoding"] = experimental_encoding
+
+    if experimental_encoding:
+        st.info("✓ Using compact encoding: Integer + bitflag")
+    else:
+        st.warning("Using standard one-hot encoding (more features)")
 
 if experimental_encoding:
     st.info(
@@ -291,13 +298,19 @@ if generate_clicked:
         fused_tbl = base.merge(num_wavg, on=selected_cols, how="left")
         key_id_col = "profile_id"
 
-        # Patient block (categoricals/binaries)
+        # Patient block: separate features by type
         RISK = {
             "Hearingloss", "BrainInjury", "Hypertension",
             "Alcohol", "Obesity", "Diabetes"
         }
+        # Continuous numeric features (should be standardized, not encoded)
+        NUMERIC_CONTINUOUS = {
+            "LENSTAYD_LOG", "NUM_VISITS", "READMIT_PROPORTION"
+        }
+
         bin_cols = [c for c in selected_cols if c in RISK and c in fused_tbl.columns]
-        cat_cols = [c for c in selected_cols if c not in bin_cols]
+        num_cols = [c for c in selected_cols if c in NUMERIC_CONTINUOUS and c in fused_tbl.columns]
+        cat_cols = [c for c in selected_cols if c not in bin_cols and c not in num_cols]
 
         # Experimental encoding mode
         encoding_metadata = {
@@ -315,7 +328,14 @@ if generate_clicked:
             X_bin, bitflag_map = bitflag_encode_multibinary(fused_tbl, bin_cols)
             encoding_metadata["bitflag_mapping"] = bitflag_map
 
-            patient_block = pd.concat([X_cat, X_bin], axis=1)
+            # Standardize continuous numerics (like ZIP features)
+            if num_cols:
+                X_num = fused_tbl[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+                X_num_std = _standardize(X_num)
+            else:
+                X_num_std = pd.DataFrame(index=fused_tbl.index)
+
+            patient_block = pd.concat([X_cat, X_bin, X_num_std], axis=1)
         else:
             # Standard one-hot encoding
             X_cat = _one_hot(fused_tbl, cat_cols)
@@ -325,7 +345,15 @@ if generate_clicked:
                     pd.to_numeric(fused_tbl[c], errors="coerce")
                     .fillna(0.0).clip(0, 1).astype(float)
                 )
-            patient_block = pd.concat([X_cat, X_bin], axis=1)
+
+            # Standardize continuous numerics (same as experimental)
+            if num_cols:
+                X_num = fused_tbl[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+                X_num_std = _standardize(X_num)
+            else:
+                X_num_std = pd.DataFrame(index=fused_tbl.index)
+
+            patient_block = pd.concat([X_cat, X_bin, X_num_std], axis=1)
 
         # ZIP block (numeric std + optional one-hot community on split path)
         zip_num_cols2 = []

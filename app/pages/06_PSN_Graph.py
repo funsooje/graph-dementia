@@ -145,7 +145,7 @@ if "patient_btw_k" not in st.session_state:
 if "scatter_color_by" not in st.session_state:
     st.session_state["scatter_color_by"] = "profile_community"
 if "patient_similarity_metric" not in st.session_state:
-    st.session_state["patient_similarity_metric"] = "cosine"
+    st.session_state["patient_similarity_metric"] = "mixed"
 
 # ---------------------------------------------------------------------
 # Main page controls
