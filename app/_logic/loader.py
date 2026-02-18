@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Optional
 
 import streamlit as st
 import pandas as pd
@@ -103,78 +104,276 @@ def _ensure_feature_groups():
 
 
 # ---------------------------------------------------------------------
+# Patient dataset helpers
+# ---------------------------------------------------------------------
+
+def _load_all_patient_datasets(cfg: dict) -> dict:
+    """
+    Load all patient datasets from config into a dict.
+
+    Returns:
+        dict: {key -> {"df": DataFrame, "label": str}}
+
+    Falls back to legacy paths.patients if patient_datasets is not present.
+    """
+    pat_cfg = cfg.get("patient_datasets", {})
+
+    # Legacy fallback: support old YAML format with paths.patients
+    if not pat_cfg:
+        paths = cfg.get("paths", {})
+        if "patients" in paths:
+            pat_cfg = {
+                "default": {
+                    "label": "Patient Level",
+                    "path": paths["patients"],
+                }
+            }
+
+    datasets = {}
+    errors = []
+    for key, ds_cfg in pat_cfg.items():
+        try:
+            df = load_csv(ds_cfg["path"])
+            if "AGE_BIN" in df.columns:
+                df = df.copy()
+                df["AGE_BIN"] = (
+                    df["AGE_BIN"]
+                    .astype("string")
+                    .str.strip()
+                    .replace({"<65": "45-65"})
+                )
+            datasets[key] = {
+                "df": df,
+                "label": ds_cfg.get("label", key),
+            }
+        except Exception as e:
+            errors.append(f"'{key}': {e}")
+
+    if errors:
+        st.warning("Some patient datasets failed to load:\n" + "\n".join(f"- {e}" for e in errors))
+
+    return datasets
+
+
+def _render_patient_selector() -> Optional[str]:
+    """
+    Render a sidebar selectbox for switching the active patient dataset.
+    Returns the selected dataset key, or None if no datasets are loaded.
+    Updates st.session_state['active_patient_key'] and the patients_df alias.
+    """
+    datasets = st.session_state.get("patient_datasets", {})
+    if not datasets:
+        return None
+
+    keys = list(datasets.keys())
+    current_key = st.session_state.get("active_patient_key", keys[0])
+    if current_key not in keys:
+        current_key = keys[0]
+
+    labels = {k: v["label"] for k, v in datasets.items()}
+    idx = keys.index(current_key)
+
+    selected_key = st.sidebar.selectbox(
+        "Patient Dataset",
+        options=keys,
+        format_func=lambda k: labels[k],
+        index=idx,
+        key="_pat_dataset_selector",
+    )
+
+    st.session_state["active_patient_key"] = selected_key
+    st.session_state["patients_df"] = datasets[selected_key]["df"]
+
+    return selected_key
+
+
+# ---------------------------------------------------------------------
+# Context dataset helpers
+# ---------------------------------------------------------------------
+
+def _clean_coords(df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """Validate and clean a zip_coords DataFrame. Returns cleaned df or None."""
+    required = {"zip", "lat", "lng"}
+    if not required.issubset(set(df.columns)):
+        return None
+    df = df.copy()
+    df["zip"] = df["zip"].astype(str)
+    df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
+    df["lng"] = pd.to_numeric(df["lng"], errors="coerce")
+    return df.dropna(subset=["lat", "lng"])
+
+
+def _load_all_context_datasets(cfg: dict) -> dict:
+    """
+    Load all context datasets from config into a dict.
+
+    Returns:
+        dict: {key -> {"df": DataFrame, "coords": DataFrame, "label": str}}
+
+    Falls back gracefully to old paths.zip_context / paths.zip_coords if
+    context_datasets is not present in the config.
+    """
+    ctx_cfg = cfg.get("context_datasets", {})
+
+    # Legacy fallback: support old YAML format with paths.zip_context / paths.zip_coords
+    if not ctx_cfg:
+        paths = cfg.get("paths", {})
+        if "zip_context" in paths and "zip_coords" in paths:
+            ctx_cfg = {
+                "default": {
+                    "label": "Default",
+                    "zip_context": paths["zip_context"],
+                    "zip_coords": paths["zip_coords"],
+                }
+            }
+
+    datasets = {}
+    errors = []
+    for key, ds_cfg in ctx_cfg.items():
+        try:
+            zipc = load_csv(ds_cfg["zip_context"])
+            raw_coords = load_csv(ds_cfg["zip_coords"])
+            coords = _clean_coords(raw_coords)
+            if coords is None:
+                errors.append(f"'{key}': zip_coords missing required columns (zip, lat, lng)")
+                continue
+            datasets[key] = {
+                "df": zipc,
+                "coords": coords,
+                "label": ds_cfg.get("label", key),
+            }
+        except Exception as e:
+            errors.append(f"'{key}': {e}")
+
+    if errors:
+        st.warning("Some context datasets failed to load:\n" + "\n".join(f"- {e}" for e in errors))
+
+    return datasets
+
+
+def _render_context_selector() -> Optional[str]:
+    """
+    Render a sidebar selectbox for switching the active context dataset.
+    Returns the selected dataset key, or None if no datasets are loaded.
+    Updates st.session_state['active_context_key'] and the zip_df/zip_coords aliases.
+    """
+    datasets = st.session_state.get("context_datasets", {})
+    if not datasets:
+        return None
+
+    keys = list(datasets.keys())
+    current_key = st.session_state.get("active_context_key", keys[0])
+    if current_key not in keys:
+        current_key = keys[0]
+
+    labels = {k: v["label"] for k, v in datasets.items()}
+    idx = keys.index(current_key)
+
+    selected_key = st.sidebar.selectbox(
+        "Context Dataset",
+        options=keys,
+        format_func=lambda k: labels[k],
+        index=idx,
+        key="_ctx_dataset_selector",
+    )
+
+    # Update active key and backward-compatible aliases
+    st.session_state["active_context_key"] = selected_key
+    st.session_state["zip_df"] = datasets[selected_key]["df"]
+    st.session_state["zip_coords"] = datasets[selected_key]["coords"]
+
+    return selected_key
+
+
+# ---------------------------------------------------------------------
 # Main data loader
 # ---------------------------------------------------------------------
 def ensure_data_loaded(force_reload: bool = False) -> bool:
     """
     Ensure core datasets and feature groups are loaded into st.session_state.
 
-    Loads: patients_df, zip_df, zip_coords, wa_boundary,
-           default_feature_groups, feature_groups.
-    Shows a spinner while loading. Returns True if successful.
+    Loads: patients_df (alias for active patient dataset), wa_boundary,
+    all patient_datasets, and all context_datasets (zip_df/zip_coords are
+    backward-compatible aliases pointing to the active context dataset).
+    Renders sidebar selectors so users can switch datasets without restart.
+
+    Returns True if successful.
     """
     from app._logic.config import load_config
-
-    all_keys = [
-        "patients_df", "zip_df", "zip_coords", "wa_boundary",
-        "default_feature_groups",
-    ]
-    if not force_reload and all(k in st.session_state for k in all_keys):
-        return True
 
     # Feature groups (lightweight — from JSON config files)
     _ensure_feature_groups()
 
-    # Core data — skip if already loaded (unless force)
-    data_keys = ["patients_df", "zip_df", "zip_coords", "wa_boundary"]
-    if not force_reload and all(k in st.session_state for k in data_keys):
+    # Check what still needs to be loaded
+    base_keys_needed = ["patients_df", "wa_boundary"]
+    patients_needed = "patient_datasets" not in st.session_state
+    contexts_needed = "context_datasets" not in st.session_state
+
+    already_loaded = (
+        not force_reload
+        and not patients_needed
+        and not contexts_needed
+        and all(k in st.session_state for k in base_keys_needed)
+    )
+    if already_loaded:
+        # Data already loaded — just update sidebar selectors + aliases
+        _render_patient_selector()
+        _render_context_selector()
         return True
 
     try:
         cfg = load_config()
-        with st.spinner("Loading data..."):
-            # CSVs
-            pat = load_csv(cfg["paths"]["patients"])
-            zipc = load_csv(cfg["paths"]["zip_context"])
-            zip_coords = load_csv(cfg["paths"]["zip_coords"])
 
-            # Validate/clean coords
-            required = {"zip", "lat", "lng"}
-            if not required.issubset(set(zip_coords.columns)):
-                st.error("zip_coords must contain columns: zip, lat, lng")
-                return False
-            zip_coords = zip_coords.copy()
-            zip_coords["zip"] = zip_coords["zip"].astype(str)
-            zip_coords["lat"] = pd.to_numeric(zip_coords["lat"], errors="coerce")
-            zip_coords["lng"] = pd.to_numeric(zip_coords["lng"], errors="coerce")
-            zip_coords = zip_coords.dropna(subset=["lat", "lng"])
+        # --- Patient datasets (all of them) ---
+        if force_reload or "patient_datasets" not in st.session_state:
+            with st.spinner("Loading patient datasets..."):
+                pat_datasets = _load_all_patient_datasets(cfg)
+                if not pat_datasets:
+                    st.error("No patient datasets could be loaded. Check configs/default.yaml.")
+                    return False
+                st.session_state["patient_datasets"] = pat_datasets
 
-            # Washington boundary
-            import geopandas as gpd
+                # Default to first dataset if active key is not set or invalid
+                if (
+                    "active_patient_key" not in st.session_state
+                    or st.session_state["active_patient_key"] not in pat_datasets
+                ):
+                    first_key = next(iter(pat_datasets))
+                    st.session_state["active_patient_key"] = first_key
+                    st.session_state["patients_df"] = pat_datasets[first_key]["df"]
 
-            states = gpd.read_file(cfg["paths"]["wa_state_zip"])
-            wa_boundary = states[states["STUSPS"] == "WA"]
-            if wa_boundary.empty:
-                st.error("Washington boundary not found in shapefile.")
-                return False
+        # --- WA boundary ---
+        if force_reload or "wa_boundary" not in st.session_state:
+            with st.spinner("Loading Washington boundary..."):
+                import geopandas as gpd
+                states = gpd.read_file(cfg["paths"]["wa_state_zip"])
+                wa_boundary = states[states["STUSPS"] == "WA"]
+                if wa_boundary.empty:
+                    st.error("Washington boundary not found in shapefile.")
+                    return False
+                st.session_state["wa_boundary"] = wa_boundary
 
-            # AGE_BIN normalization
-            if "AGE_BIN" in pat.columns:
-                pat = pat.copy()
-                pat["AGE_BIN"] = (
-                    pat["AGE_BIN"]
-                    .astype("string")
-                    .str.strip()
-                    .replace({"<65": "45-65"})
-                )
+        # --- Context datasets (all of them) ---
+        if force_reload or "context_datasets" not in st.session_state:
+            with st.spinner("Loading context datasets..."):
+                datasets = _load_all_context_datasets(cfg)
+                if not datasets:
+                    st.error("No context datasets could be loaded. Check configs/default.yaml.")
+                    return False
+                st.session_state["context_datasets"] = datasets
 
-            # Store in session state
-            st.session_state["patients_df"] = pat
-            st.session_state["zip_df"] = zipc
-            st.session_state["zip_coords"] = zip_coords
-            st.session_state["wa_boundary"] = wa_boundary
+                # Default to first dataset if active key is not set or invalid
+                if (
+                    "active_context_key" not in st.session_state
+                    or st.session_state["active_context_key"] not in datasets
+                ):
+                    st.session_state["active_context_key"] = next(iter(datasets))
 
-        return True
     except Exception as e:
         st.error(f"Failed to load data: {e}")
         return False
+
+    # Render sidebar selectors and update aliases (always, every page render)
+    _render_patient_selector()
+    _render_context_selector()
+    return True

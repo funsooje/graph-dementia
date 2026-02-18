@@ -1,5 +1,26 @@
 paths:
-  patients: data/processed/patients_patient_level.csv
-  zip_context: data/raw/zip_context.csv
-  zip_coords: data/raw/uszips.csv
   wa_state_zip: data/raw/cb_2020_us_state_20m.zip
+
+# Multiple patient datasets (patient-level, visit-level, etc.)
+# Add a new entry here to make it available without restarting the app.
+# The first entry is the default active dataset on first load.
+patient_datasets:
+  patient_level:
+    label: "Patient Level (84,665)"
+    path: data/processed/patients_patient_level.csv
+  visit_level:
+    label: "Visit Level (135,096)"
+    path: data/processed/patients_processed.csv
+
+# Multiple context datasets (census tracts, ZIP codes, etc.)
+# Add a new entry here to make it available without restarting the app.
+# The first entry is the default active dataset on first load.
+context_datasets:
+  zip_codes:
+    label: "ZIP Codes (673)"
+    zip_context: data/raw/zip_context.csv
+    zip_coords: data/raw/uszips.csv
+  census_tracts:
+    label: "Census Tracts (71k)"
+    zip_context: data/raw/census_context.csv
+    zip_coords: data/raw/uscensus.csv

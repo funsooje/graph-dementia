@@ -85,16 +85,32 @@ def compute_adaptive_pca_indices(
         "ses_cols": ses_used
     }
 
-def build_knn_graph(features: np.ndarray, k_neighbors: int, knn_type: str):
+def build_knn_graph(features: np.ndarray, k_neighbors: int, knn_type: str, use_approximate: bool = None):
     """
     Build k-NN graph from feature matrix.
-    
+
     Args:
         features: n x d feature matrix
         k_neighbors: number of neighbors per node
         knn_type: "mutual" -> undirected mutual k-NN
                  "directed" -> directed k-NN (i -> top-k neighbors of i)
+        use_approximate: If True, use PyNNDescent for large datasets.
+                        If None, automatically choose based on n > 5000.
     """
+    n = features.shape[0]
+
+    # Auto-detect: use approximate for large datasets
+    if use_approximate is None:
+        use_approximate = (n > 5000)
+
+    if use_approximate:
+        return _build_knn_graph_approximate(features, k_neighbors, knn_type)
+    else:
+        return _build_knn_graph_exact(features, k_neighbors, knn_type)
+
+
+def _build_knn_graph_exact(features: np.ndarray, k_neighbors: int, knn_type: str):
+    """Build k-NN graph using exact cosine similarity (for small datasets)."""
     sim = cosine_similarity(features)
     np.fill_diagonal(sim, -np.inf)
     n = sim.shape[0]
@@ -126,6 +142,70 @@ def build_knn_graph(features: np.ndarray, k_neighbors: int, knn_type: str):
                 w = float(sim[i, j])
                 if np.isfinite(w):
                     G.add_edge(i, j, weight=w)
+    return G
+
+
+def _build_knn_graph_approximate(features: np.ndarray, k_neighbors: int, knn_type: str):
+    """Build k-NN graph using PyNNDescent (for large datasets)."""
+    try:
+        from pynndescent import NNDescent
+    except ImportError:
+        raise ImportError(
+            "PyNNDescent is required for large datasets. Install with: pip install pynndescent"
+        )
+
+    n = features.shape[0]
+
+    # Build approximate k-NN index
+    # Tuned for speed: reduce trees, iterations, candidates
+    index = NNDescent(
+        features,
+        metric='cosine',
+        n_neighbors=k_neighbors + 1,  # +1 because it includes self
+        n_trees=8,                     # Default 8 (lower = faster but less accurate)
+        n_iters=5,                     # Default auto (lower = faster)
+        max_candidates=30,             # Default 60 (lower = faster)
+        pruning_degree_multiplier=1.2, # Default 1.5 (lower = faster)
+        diversify_prob=0.8,            # Default 1.0 (lower = faster)
+        n_jobs=-1,                     # Use all CPU cores
+        verbose=False
+    )
+
+    # Get k-NN indices and distances for all nodes
+    neighbors, distances = index.neighbor_graph
+
+    # Convert distances to similarities (cosine distance -> similarity)
+    # PyNNDescent returns cosine distance, we want similarity
+    similarities = 1.0 - distances
+
+    if knn_type == "directed":
+        G = nx.DiGraph()
+        G.add_nodes_from(range(n))
+        for i in range(n):
+            for j_idx, j in enumerate(neighbors[i]):
+                if j != i:  # Skip self-loops
+                    w = float(similarities[i, j_idx])
+                    if np.isfinite(w) and w > 0:  # Only add positive similarities
+                        G.add_edge(i, j, weight=w)
+        return G
+
+    # mutual (intersection) undirected
+    G = nx.Graph()
+    G.add_nodes_from(range(n))
+    for i in range(n):
+        nbrs_i = set(neighbors[i])
+        nbrs_i.discard(i)  # Remove self
+        for j in nbrs_i:
+            if i < j:  # Avoid duplicate edges
+                # Check if mutual (j is also in i's neighbors)
+                nbrs_j = set(neighbors[j])
+                if i in nbrs_j:
+                    # Find similarity value (could be from either direction, use max)
+                    sim_i_j = similarities[i, list(neighbors[i]).index(j)] if j in neighbors[i] else 0
+                    sim_j_i = similarities[j, list(neighbors[j]).index(i)] if i in neighbors[j] else 0
+                    w = float(max(sim_i_j, sim_j_i))
+                    if np.isfinite(w) and w > 0:
+                        G.add_edge(i, j, weight=w)
     return G
 
 def compute_graph_metrics(G, resolution=1.0):
