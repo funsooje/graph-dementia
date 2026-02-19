@@ -30,7 +30,7 @@ PAT_GROUPS = {
     "demographics": ["SEX", "Race", "AGE_BIN"],
     "utilization": ["LENSTAYD_BIN", "LENSTAYD_LOG", "PAYER", "NUM_VISITS"],
     "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes"],
-    "outcomes": ["READMIT_PROPORTION", "EVER_READMITTED"],
+    "outcomes": ["READMIT_COUNT", "READMIT_RATE", "EVER_READMITTED", "REVISIT_30"],
 }
 
 # ---------------------------------------------------------------------
@@ -85,6 +85,8 @@ if "pf_selected_util" not in st.session_state:
     st.session_state["pf_selected_util"] = []
 if "pf_selected_risk" not in st.session_state:
     st.session_state["pf_selected_risk"] = []
+if "pf_selected_outcomes" not in st.session_state:
+    st.session_state["pf_selected_outcomes"] = []
 if "pf_use_degree" not in st.session_state:
     st.session_state["pf_use_degree"] = False
 if "pf_use_pr" not in st.session_state:
@@ -106,11 +108,12 @@ st.subheader("1. Profile Columns")
 st.caption("Select columns for patient profiling (categorical/binned only)")
 
 # Get available columns for each group
-demo_cols = [c for c in PAT_GROUPS["demographics"] if c in pat.columns]
-util_cols = [c for c in PAT_GROUPS["utilization"] if c in pat.columns]
-risk_cols = [c for c in PAT_GROUPS["risk_binaries"] if c in pat.columns]
+demo_cols    = [c for c in PAT_GROUPS["demographics"]  if c in pat.columns]
+util_cols    = [c for c in PAT_GROUPS["utilization"]   if c in pat.columns]
+risk_cols    = [c for c in PAT_GROUPS["risk_binaries"] if c in pat.columns]
+outcome_cols = [c for c in PAT_GROUPS["outcomes"]      if c in pat.columns]
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     st.markdown("**Demographics**")
@@ -136,13 +139,22 @@ with col3:
         if checked:
             selected_risk.append(col)
 
+with col4:
+    st.markdown("**Outcomes**")
+    selected_outcomes = []
+    for col in outcome_cols:
+        checked = st.checkbox(col, key=f"out_{col}", value=(col in st.session_state["pf_selected_outcomes"]))
+        if checked:
+            selected_outcomes.append(col)
+
 # Update session state with current selections
-st.session_state["pf_selected_demo"] = selected_demo
-st.session_state["pf_selected_util"] = selected_util
-st.session_state["pf_selected_risk"] = selected_risk
+st.session_state["pf_selected_demo"]     = selected_demo
+st.session_state["pf_selected_util"]     = selected_util
+st.session_state["pf_selected_risk"]     = selected_risk
+st.session_state["pf_selected_outcomes"] = selected_outcomes
 
 # Combine all selected columns
-selected_cols = selected_demo + selected_util + selected_risk
+selected_cols = selected_demo + selected_util + selected_risk + selected_outcomes
 
 st.divider()
 
@@ -305,7 +317,8 @@ if generate_clicked:
         }
         # Continuous numeric features (should be standardized, not encoded)
         NUMERIC_CONTINUOUS = {
-            "LENSTAYD_LOG", "NUM_VISITS", "READMIT_PROPORTION"
+            "LENSTAYD_LOG", "NUM_VISITS",
+        "READMIT_COUNT", "READMIT_RATE", "REVISIT_30",
         }
 
         bin_cols = [c for c in selected_cols if c in RISK and c in fused_tbl.columns]

@@ -54,7 +54,7 @@ PAT_GROUPS = {
     "demographics": ["SEX", "Race", "AGE_BIN"],
     "utilization": ["LENSTAYD_BIN", "LENSTAYD_LOG", "PAYER", "NUM_VISITS"],
     "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes"],
-    "outcomes": ["READMIT_PROPORTION", "EVER_READMITTED"],
+    "outcomes": ["READMIT_COUNT", "READMIT_RATE", "EVER_READMITTED", "REVISIT_30"],
 }
 
 demo_cols = [c for c in PAT_GROUPS["demographics"] if c in pat.columns]
