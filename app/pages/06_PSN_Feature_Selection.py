@@ -308,6 +308,20 @@ if generate_clicked:
             num_wavg = base[selected_cols].copy()
 
         fused_tbl = base.merge(num_wavg, on=selected_cols, how="left")
+
+        # When zip_community splits profiles, recompute profile_count at the
+        # finer grouping level (selected_cols + zip_community) so each row
+        # reflects the patient count for that specific community slice, not
+        # the whole pre-split profile.
+        if use_zip_comm and "zip_community" in fused_tbl.columns:
+            comm_counts = (
+                zc2.groupby(grouping_cols, dropna=False)["n"]
+                .sum()
+                .reset_index(name="profile_count")
+            )
+            fused_tbl = fused_tbl.drop(columns=["profile_count"], errors="ignore")
+            fused_tbl = fused_tbl.merge(comm_counts, on=grouping_cols, how="left")
+
         key_id_col = "profile_id"
 
         # Patient block: separate features by type
