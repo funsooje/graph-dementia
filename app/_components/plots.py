@@ -178,10 +178,22 @@ def plot_geographic_communities(
         crs="EPSG:4326"
     )
 
+    # --- Early exit if no matched coordinates ---
+    if gdf.empty:
+        fig, ax = plt.subplots(figsize=(12, 8))
+        washington_boundary.plot(ax=ax, color="lightgray", edgecolor="black")
+        ax.set_title("ZIP communities (geographic) — no coordinate matches")
+        ax.grid(True, alpha=0.3)
+        return fig
+
     # --- Marker sizes ---
-    if size_col and size_col in gdf.columns:
-        s = gdf[size_col].to_numpy()
-        s_min, s_max = np.quantile(s, [0.05, 0.95])
+    s_valid = (
+        gdf[size_col].dropna().to_numpy()
+        if size_col and size_col in gdf.columns else np.array([])
+    )
+    if len(s_valid) > 0:
+        s = gdf[size_col].fillna(s_valid.mean()).to_numpy()
+        s_min, s_max = np.quantile(s_valid, [0.05, 0.95])
         s_range = max(s_max - s_min, 1e-12)
         sizes = base_markersize * (1.0 + (scale_factor - 1.0) * (np.clip(s, s_min, s_max) - s_min) / s_range)
     else:
@@ -193,9 +205,9 @@ def plot_geographic_communities(
 
     if community_color_map:
         gdf["__color__"] = gdf[comm_col].map(community_color_map).fillna(isolated_node_color)
-        gdf.plot(ax=ax, color=gdf["__color__"], markersize=sizes, legend=False)
+        gdf.plot(ax=ax, color=gdf["__color__"], markersize=sizes, legend=False, aspect=None)
     else:
-        gdf.plot(ax=ax, column=comm_col, cmap="tab20", markersize=sizes, legend=False)
+        gdf.plot(ax=ax, column=comm_col, cmap="tab20", markersize=sizes, legend=False, aspect=None)
 
     ax.set_xlabel("Longitude")
     ax.set_ylabel("Latitude")

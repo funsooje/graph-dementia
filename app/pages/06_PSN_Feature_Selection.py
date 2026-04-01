@@ -28,9 +28,9 @@ PAT_GROUPS = {
     "ids": ["PATIENTID"],
     "location": ["ZIPCODE"],
     "demographics": ["SEX", "Race", "AGE_BIN"],
-    "utilization": ["LENSTAYD_BIN", "LENSTAYD_LOG", "PAYER", "NUM_VISITS"],
+    "utilization": ["LENSTAYD_BIN", "LENSTAYD_LOG", "PAYER", "NUM_VISITS", "REVISIT_30"],
     "risk_binaries": ["Hearingloss", "BrainInjury", "Hypertension", "Alcohol", "Obesity", "Diabetes"],
-    "outcomes": ["READMIT_COUNT", "READMIT_RATE", "EVER_READMITTED", "REVISIT_30"],
+    "outcomes": ["READMIT_COUNT", "READMIT_RATE", "EVER_READMITTED"],
 }
 
 # ---------------------------------------------------------------------
