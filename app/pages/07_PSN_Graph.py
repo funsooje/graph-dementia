@@ -456,6 +456,7 @@ if generate_clicked:
 
     # Persist into cache (graph, features, optional similarity file path)
     graph_cache[graph_cache_key] = {"graph": G, "features": tbl, "sim_path": sim_file}
+    st.session_state["active_psn_graph_key"] = graph_cache_key
 
     # ---- Plotting gates ----
     # Always compute scatter (depends only on weights).
