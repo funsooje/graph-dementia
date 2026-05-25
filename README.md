@@ -328,11 +328,6 @@ graph-dementia/
 │       ├── default_feature_groups.json  # Canonical ZIP feature group definitions
 │       ├── feature_groups.json          # User-edited feature groups (persisted by app)
 │       └── psn_feature_groups.json      # PSN-specific feature group configuration
-├── docs/
-│   ├── community_analysis_framework.md  # Design decisions for community analysis
-│   ├── psn_analysis_reference.md        # Reference guide for interpreting PSN outputs
-│   └── methodology/                     # Technical methodology document (LaTeX + PDF)
-├── archive/                             # Retired pages (not in active pipeline)
 ├── outputs/                             # Figures, tables, logs (not committed)
 └── requirements.txt
 ```
