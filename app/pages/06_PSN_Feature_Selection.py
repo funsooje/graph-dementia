@@ -416,7 +416,10 @@ if generate_clicked:
         st.session_state["pf_fused_table"]   = fused_tbl
         st.session_state["pf_patient_block_cols"] = list(patient_block.columns)
         st.session_state["pf_zip_block_cols"]     = list(zip_block.columns)
-        st.session_state["pf_fused_matrix"]  = X_fused.values
+        # Use to_numpy with na_value so pd.NA from nullable dtypes (Int64, Float64,
+        # boolean) becomes 0.0 rather than surviving as a Python object, which would
+        # cause float(pd.NA) → TypeError when the graph builder calls .astype(float).
+        st.session_state["pf_fused_matrix"]  = X_fused.to_numpy(dtype=float, na_value=0.0)
         st.session_state["pf_fused_index"]   = (
             fused_tbl.get(
                 key_id_col, pd.Series(range(len(fused_tbl)))
@@ -473,14 +476,11 @@ if generate_clicked or "pf_profiles_base" in st.session_state:
     meta = st.session_state.get("pf_fused_meta", {})
     if meta:
         summary_df = pd.DataFrame([
-            {"Metric": "Total Rows", "Value": meta.get("rows", "N/A")},
-            {"Metric": "Total Columns", "Value": meta.get("cols_total", "N/A")},
-            {"Metric": "Patient Block Columns", "Value": meta.get("cols_patient", "N/A")},
-            {
-                "Metric": "Neighborhood Block Columns",
-                "Value": meta.get("cols_zip", "N/A")
-            },
-            {"Metric": "Encoding Mode", "Value": meta.get("encoding_mode", "standard")},
+            {"Metric": "Total Rows", "Value": str(meta.get("rows", "N/A"))},
+            {"Metric": "Total Columns", "Value": str(meta.get("cols_total", "N/A"))},
+            {"Metric": "Patient Block Columns", "Value": str(meta.get("cols_patient", "N/A"))},
+            {"Metric": "Neighborhood Block Columns", "Value": str(meta.get("cols_zip", "N/A"))},
+            {"Metric": "Encoding Mode", "Value": str(meta.get("encoding_mode", "standard"))},
         ])
         st.dataframe(summary_df, width='content', hide_index=True)
         
